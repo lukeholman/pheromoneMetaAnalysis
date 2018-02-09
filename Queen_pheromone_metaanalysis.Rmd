@@ -1,0 +1,1704 @@
+---
+title: "Queen pheromones and reproductive division of labour: a meta-analysis"
+subtitle: Online Supplementary Material
+author: "Luke Holman, University of Melbourne"  
+output:
+  html_document:
+    code_folding: hide
+    depth: 1
+    number_sections: no
+    theme: yeti
+    toc: yes
+    toc_float: yes
+---
+
+# Methods
+
+### Inclusion criteria
+The aim of this meta-analysis is to determine whether chemcials that are characteristic of fertile females (e.g. queens and egg-laying workers) cause reduced reproduction in other females. To this end, I included any study that exposed social insects to A) chemicals obtained from a fertile individual (e.g. CHCs extracted from a queen using solvent), or B) synthetic versions of chemicals produced by fertile individuals. I also included studies that exposed workers to a live queen, provided that a suitable control was available (i.e. a live queen lacking fertility-related CHCs). However, studies testing for a difference between 'queenright' and queenless workers were not included, since there are confounding differences between treatments (e.g. the behaviour of the queen).
+
+### My rules when calculating effect sizes
+
+1. If I had access to the raw data, I re-ran the model using what I consider to be best practice, rather than using summary statistics or model results presented in the paper. My reasoning is that many published papers have used suboptimal statistics (Holman et al. 2017 _PeerJ_) that could lead to less meaningful effect sizes. Also, this approach should reduce the amount of unexplained variance between effect sizes that arises from inconsistencies in the choice of statistical analysis.
+
+2. If the experiment was run across multiple colonies, I accounted for the colony effect using a mixed model with colony as a random factor whenever possible.
+
+3. If ovary development was scored on an ordinal scale (e.g. 0 for none, 1 for a little bit of development, 2 for somewhat more development, 3 for maximal development), I re-classified it as a binary variable. This decision was taken because ordinal data are hard to analyse properly. One should not use a model (such as ANOVA or a t-test) that assumes category 1 is half as developed as category 2. Unfortunately this error was common in the literature. 
+
+4. If the authors recorded covariates that could affect fecundity, such as body size or the number of workers in the experimental colony, I included this covariate in the model when calculating effect size, _if_ that the covariate was a significant predictor of fecundity.
+
+5. If the authors recorded multiple measures of worker fecundity, I picked the one that is closest to measuring actual worker progeny production or oviposition rate. For example, I would prefer the number of eggs laid over some proxy for fecundity, such as ovary development. Occasionally, I broke this rule because the best measure of fecundity had a much lower sample size than the second-best measure.
+
+### Studies omitted because insufficient data were available
+The following studies would have been included in the meta-analysis, but I could not recover enough data to calculate effect size.
+
+**Pain 1961 Les Annales de l’Abeille** (Accessible at https://hal.archives-ouvertes.fr/hal-00890145/document) This study seems to have some relevant experiments. Perhaps due to my modest French skills, I struggled to find the data that is alluded to in the English language summary. Supposedly the study has data on the effects of dead queens, and of 9-ODA, on worker fecundity.
+
+**Röseler et al. 1982 Experientia** Concluded that queen bumblebees produce inhibitory chemicals from their mandibular glands. I couldn't find any information on the sample size, and it's unclear how the experiment was desgined.
+
+**Willis et al. 1990 Canadian Entomologist**: Some means were available (presented below), but not enough data to calculate a meaningful effect size estimate. The study's title is 'Queen honey bee mandibular pheromone does not affect worker ovary development', though the data do not seem to provide much evidence for that conclusion: pheromone-treated workers did have a lower average ovary development score (it is unclear if this difference is statistically significant). That conclusion is also contradicted by >10 other studies.
+
+**Maisonnasse et al 2010 Frontiers in Zoology**:  The study compared the ability of queens with and without their mandibular glands to sterilise workers. However the only data presented show mean ovary score (as for Willis et al), and so I cannot calculate a meaningful effect size estimate. The study concluded that both kinds of queens induce sterility, and the removal of the mandibular glands does not reduce the queen's sterilising effect (if anything, the effect was increased).
+
+**Backx et al. 2012 Insectes Sociaux**: The study presented workers with QMP or a control, and found that QMP inhibited ovary development. However, the only data presented show mean ovary score (as for Willis et al), and so I cannot calculate a meaningful effect size estimate.
+
+### Studies omitted due to their experimental design
+The following studies would have been included in the meta-analysis, but I concluded that their experimental designs were confounded, preventing them from testing the hypotheses that they were designed for.
+
+**Akre and Reed 1982**: This study focused on the wasps _Vespula pensylvanica_ and _V. vulgaris_. The authors either confined workers to a queenless nest, or gave them access to wasp comb previously touched by a queen. The latter group had less well-developed ovaries, and the authors concluded that the queen deposits chemicals on the nest that inhibited their fecundity. However, the workers that encountered the queen's nest material were also anaesthetised with ether every 24h or 48h and moved around, while the controls were not. Etherising the wasps could interfere with their ovary development, so this experiment is not informative.
+
+**Orlova et al. 2013**: This study claims that virgin queens are less able to inhibit worker fecundity than are mated queens, in honeybees. However, the experiment is confounded by cohort and seasonal effects, so it cannot properly measure the effect of queen mating status. The two types of queens were not measured at the same time - the text says, "The VQR subset, carried out in August 2009, included 13 QR groups of 30 workers each and 3 QL control groups of 51 workers each. The MQR subset carried out in November 2009...". 
+
+```{r warning=FALSE, message=FALSE}
+library(compute.es)
+library(dplyr)
+library(lme4)
+library(pander)
+library(tibble)
+library(lmerTest)
+library(lsmeans)
+library(coxme)
+library(ggplot2)
+library(metafor)
+library(stringr)
+library(reshape2)
+# install_github("eclarke/ggbeeswarm")
+library(ggbeeswarm)
+library(pwr)
+
+# tidiness function for adding meta-data to some model results
+foo <- function(ref, spp, tax, bl, fert, n, src, cov, resp){ 
+  df <- data.frame(get(ref)) %>% 
+    rownames_to_column %>%
+    filter(rowname != "(Intercept)") 
+  df <- df[, names(df) != "df"] # remove degrees of freedom, generated by lmer function only
+  names(df) <- c("Treatment", "LOR", "SE", "statistic", "p")
+  df %>% mutate(Treatment = gsub("treatment", "", Treatment),
+                LowerCI = LOR - 1.96*SE, UpperCI = LOR + 1.96*SE, 
+                Study = ref, Species = spp, Taxon = tax, Blind = bl, 
+                Fertility.signal=fert, n = n, 
+                Source = src, Covariates = cov, Response = resp) %>%
+    select(Taxon, Species, Study, Blind, Treatment, Fertility.signal, 
+           LOR, LowerCI, UpperCI, p, n, Source, Covariates, Response)
+}
+```
+
+
+# Data collection
+
+## _Apis_ honeybees
+
+### de Groot 1954: _Apis mellifera_
+De Groot, A. P., & Voogd, S. 1954. On the ovary development in queenless worker bees (_Apis mellifica_ L.). Experientia, 10, 384-385.
+
+The authors exposed workers to a dead queen, or nothing. It's not an ideal experiment, since the workers might be responding the queen's body rather than her odour, but I included in the meta-analysis for completeness. The data were extracted from the table, which lists the number of workers with one of 5 oocytes scores in each colony. I included only the queenless controls, and the treatments with a dead fecundated queen.
+
+```{r}
+degroot1954 <-  data.frame(treatment = rep(c("Control", "Dead queen"), each=2),
+                           colony = factor(1:4),
+                           developed =  c(13+10+7, 22+6+4, 2, 2),
+                           undeveloped = c(5+10, 4+3, 44, 44))
+degroot1954 <- summary(glmer(cbind(developed,undeveloped)~treatment + (1|colony), data=degroot1954, family=binomial))$coefficients
+degroot1954 <- foo("degroot1954", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 176, "Raw data", 0, "Ovary activation")
+all.data <- degroot1954
+```
+
+
+### Butler 1957: _Apis mellifera_
+Butler C.G. 1957 The control of ovary development in worker honeybees. Experientia 13, 256-257.
+
+Data extracted from Table 1: the author compared the effect on ovary activation of a queen coated with extracted pheromones, to that of a queen whose pheromones had been removed.
+
+```{r}
+butler1957 <- data.frame(treatment = c("Control", "Queen extract"),
+                         developed = c(25, 14),
+                         undeveloped = c(9, 22))
+butler1957 <- summary(glm(cbind(developed,undeveloped)~treatment, data=butler1957, family=binomial))$coefficients
+butler1957 <- foo("butler1957", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 70, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, butler1957)
+```
+
+
+### Butler 1959: _Apis mellifera_
+Butler, C. G.  1959. The source of the substance produced by a queen honeybee (_Apis mellifera_ L.) which inhibits development of the ovaries of the workers of her colony. Physiological Entomology, 34, 137-138.
+
+Data extracted from Table 1: the author compared the effect on ovary activation of a queen coated with intact pheromones, to that of a queen whose pheromones had been removed.
+
+```{r}
+butler1959 <- data.frame(treatment = c("Control", "Queen extract"),
+                         developed = c(245, 67),
+                         undeveloped = c(360-245, 360-67))
+butler1959 <- summary(glm(cbind(developed,undeveloped)~treatment, data=butler1959, family=binomial))$coefficients
+butler1959 <- foo("butler1959", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 600, "Raw data", 0, "Ovary activation") 
+all.data <- rbind(all.data, butler1959)
+```
+
+### van Erp 1960: _Apis mellifera_
+Van Erp, A. (1960). Mode of action of the inhibitory substance of the honeybee queen. Insectes Sociaux, 7, 207-211.
+
+Exposed workers to pieces of wood coated with queen extract or a control, then measured ovary activation.
+
+```{r}
+vanerp1960 <- data.frame(treatment = rep(c("Queen extract", "Control"), each=6),
+                         cage = factor(1:12),
+                         developed = round(50*c(0.43, 0.35, 0.37, 0.27, 0.11, 0.13,
+                                                0.76, 0.42, 0.68, 0.70, 0.55, 0.76)),
+                         undeveloped = round(50*(1-c(0.43, 0.35, 0.37, 0.27, 0.11, 0.13,
+                                                     0.76, 0.42, 0.68, 0.70, 0.55, 0.76))))
+vanerp1960 <- summary(glmer(cbind(developed,undeveloped)~treatment + (1|cage), data=vanerp1960, family=binomial))$coefficients
+vanerp1960 <- foo("vanerp1960", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 600, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, vanerp1960)
+```
+
+
+### Butler et al. 1962: _Apis mellifera_
+Butler, C. G., Callow, R. K., & Johnston, N. C. 1962. The isolation and synthesis of queen substance, 9-oxodec-trans-2-enoic acid, a honeybee pheromone. Proceedings of the Royal Society of London B, 155, 417-432.
+
+The authors exposed bees to 9-ODA or complete queen extract, added to the body of a dead queen. Mean % of workers with active ovaries per cage is given in Table 5.
+
+```{r}
+butler1962 <- rbind(mes(35.33, 75.33, 5.97*sqrt(12), 5.97*sqrt(12), 12, 12, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor),
+                    mes(14.00, 75.33, 5.97*sqrt(12), 5.97*sqrt(12), 12, 12, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)) 
+names(butler1962) <- c("LOR", "LowerCI", "UpperCI")
+butler1962 <- data.frame(Taxon = "Honeybee",
+                         Species = "Apis mellifera",
+                         Study = "butler1962",
+                         Blind = "NotBlind",
+                         Treatment = c("9-ODA", "Queen extract"),
+                         Fertility.signal = "Yes",
+                         butler1962,
+                         p = c(0.0001, 0.0001),
+                         n = c(24, 24),
+                         Source = "Difference in means",
+                         Covariates = 0,
+                         Response = "Ovary activation",
+                         row.names = NULL)
+all.data <- rbind(all.data, butler1962)
+```
+
+
+### Butler and Fairey 1963: _Apis mellifera_
+Butler C.G., Fairey  E.M. 1963 The role of the queen in preventing oogenesis in worker honeybees. J Api Res 2, 14-18.
+
+This paper details several experiments in which caged worker bees were exposed to 9-ODA and the odours of live queens, and then their ovary activation was measured. 
+
+Experiment 1: Data are columns A and C from Table 1. The authors compared the effect of 9-ODA to a control (i.e. nothing).
+
+Experiment 2: Data are columns D and E from Table 1. The authors compared the volatile odours of a queen plus 9-ODA, to a control (i.e. just the volatile queen odours).
+
+Experiment 3: Data are columns A, D and E from Table 2. The authors compared the effects of 9-ODA, 9-ODA which "had been exposed to queen scent", and a control (i.e. nothing).
+
+Experiment 4: Data are columns A, B and C from Table 3. The authors compared the effects of freely-accessible 9-ODA, 9-ODA behind a double mesh, and a control (i.e. nothing).
+
+There is an additional experiment, in which the authors injected worker bees with 9-ODA and found that it inhibits ovary activation; I did not include this experiment in the meta-analysis, because this is not the natural mode in which the pheromone is delivered.
+
+```{r}
+butler1963.exp1 <- mes(36.7, 76.7, 2.50*sqrt(12), 2.15*sqrt(12), 12, 12, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)
+names(butler1963.exp1) <- c("LOR", "LowerCI", "UpperCI")
+butler1963.exp1 <- data.frame(Taxon = "Honeybee",
+                              Species = "Apis mellifera",
+                              Study = "butler1963.exp1",
+                              Blind = "NotBlind",
+                              Treatment = "9-ODA",
+                              Fertility.signal = "Yes",
+                              butler1963.exp1,
+                              p = 0.0001,
+                              n = 12,
+                              Source = "Difference in means",
+                              Covariates = 0,
+                              Response = "Ovary activation",
+                              row.names = NULL)
+
+butler1963.exp2 <- mes(31.1, 60, 2.60*sqrt(12), 2.79*sqrt(12), 12, 12, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)
+names(butler1963.exp2) <- c("LOR", "LowerCI", "UpperCI")
+butler1963.exp2 <- data.frame(Taxon = "Honeybee",
+                              Species = "Apis mellifera",
+                              Study = "butler1963.exp2",
+                              Blind = "NotBlind",
+                              Treatment = "9-ODA",
+                              Fertility.signal = "Yes",
+                              butler1963.exp2,
+                              p = 0.0001,
+                              n = 12,
+                              Source = "Difference in means",
+                              Covariates = 0,
+                              Response = "Ovary activation",
+                              row.names = NULL)
+
+butler1963.exp3 <- rbind(mes(14.8, 53.0, 1.83*sqrt(10), 5.72*sqrt(10), 10, 10, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor),
+                         mes(11.8, 53.0, 3.11*sqrt(10), 5.72*sqrt(10), 10, 10, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)) 
+names(butler1963.exp3) <- c("LOR", "LowerCI", "UpperCI")
+butler1963.exp3 <- data.frame(Taxon = "Honeybee",
+                              Species = "Apis mellifera",
+                              Study = "butler1963.exp3",
+                              Blind = "NotBlind",
+                              Treatment = c("9-ODA", "9-ODA exposed to queen scent"),
+                              Fertility.signal = "Yes",
+                              butler1963.exp3,
+                              p = 0.0001,
+                              n = 10,
+                              Source = "Difference in means",
+                              Covariates = 0,
+                              Response = "Ovary activation",
+                              row.names = NULL)
+
+butler1963.exp4 <- rbind(mes(40.3, 75.7, 3.17*sqrt(12), 3.39*sqrt(12), 12, 12, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor),
+                         mes(58.0, 75.7, 3.17*sqrt(12), 3.39*sqrt(12), 12, 12, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)) 
+names(butler1963.exp4) <- c("LOR", "LowerCI", "UpperCI")
+butler1963.exp4 <- data.frame(Taxon = "Honeybee",
+                              Species = "Apis mellifera",
+                              Study = "butler1963.exp4",
+                              Blind = "NotBlind",
+                              Treatment = c("9-ODA: direct contact", "9-ODA: volatile odours only"),
+                              Fertility.signal = "Yes",
+                              butler1963.exp4,
+                              p = 0.0001,
+                              n = 12,
+                              Source = "Difference in means",
+                              Covariates = 0,
+                              Response = "Ovary activation",
+                              row.names = NULL)
+
+all.data <- rbind(all.data, butler1963.exp1, butler1963.exp2, 
+                  butler1963.exp3, butler1963.exp4) 
+```
+
+
+### Velthuis and van Es 1964: _Apis mellifera_
+Velthuis, H. H. W., & Van Es, J. 1964. Some functional aspects of the mandibular glands of the queen honeybee. Journal of Apicultural Research, 3, 11-16.
+
+These authors housed workers in groups of 50, treated one worker with either 9-ODA or a control, and then scored ovary development in all the workers. Raw data were given in the paper.
+
+```{r}
+velthuis1964 <- data.frame(treatment = factor(rep(c("Control", "9-ODA"),each=3), levels = c("Control", "9-ODA")),
+                           cage = paste("Cage", 1:6),
+                           developed = c(42,44,47,19,7,14),
+                           undeveloped = 50 - c(42,44,47,19,7,14))
+velthuis1964 <- summary(glmer(cbind(developed,undeveloped) ~ treatment + (1|cage), data=velthuis1964, family=binomial))$coefficients
+velthuis1964 <- foo("velthuis1964", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 300, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, velthuis1964)
+```
+
+
+### Velthuis 1970: _Apis mellifera_
+Velthuis, H. H. W. 1970. Queen substances from the abdomen of the honey bee queen. Journal of Comparative Physiology A: Neuroethology, Sensory, Neural, and Behavioral Physiology, 70(2), 210-221.
+
+Data collected from Table 3. The author compared the effect of a dead queen, with or without its mandibular glands, to controls with no dead queen. There were 400 workers per treatmant per replicate, allowing me to calculate the raw data from the percentages.
+
+```{r}
+velthuis1970 <- data.frame(treatment = rep(c("Control", "Dead queen", "Dead queen (no Mandib. Gland)"), each=2),
+                           replicate = factor(rep(1:2,3)),
+                           developed = 400*c(0.29, 0.83, 0.02, 0.14, 0.08, 0.36),
+                           undeveloped = 400*(1-c(0.29, 0.83, 0.02, 0.14, 0.08, 0.36)))
+velthuis1970 <- summary(glmer(cbind(developed,undeveloped)~treatment + (1|replicate), data=velthuis1970, family=binomial))$coefficients
+velthuis1970 <- foo("velthuis1970", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 1600, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, velthuis1970)
+```
+
+
+### Willis et al. 1990: _Apis mellifera_
+Willis L.G., Winston M.L., Slessor K.N. 1990 Queen honey bee mandibular pheromone does not affect worker ovary development. Canadian Entomologist 122, 1093-1099.
+
+The original data are not available for this study - just the treatment means. However the treatment means are an average of ordinal ovary score data, so I cannot calculate a meaningful effect size (since ovary score 1 is not 'half as developed' as ovary score 2). For completeness, I present the treatment means here (estimated from Figure 1), but do not include them in the formal meta-analysis. Contrary to the paper's title, it appears that there was a difference in ovary activation between the control and the QMP-treated workers, as the SE associated with each mean appear small (~0.05). The authors did not present any statistics testing for a difference between the control and the QMP treatment.
+```{r}
+data.frame(Treatment = c("Control", "QMP: 0.001 QE", "QMP: 0.1 QE", "QMP: 1 QE", "QMP: 10 QE", "Queenright"), `Mean ovary score` = c(2.11, 2.01, 1.67, 1.88, 1.74, 0.83)) %>% pander(split.cell = 40, split.table = Inf)
+```
+
+### Hepburn et al. 1991: _Apis mellifera_
+Hepburn, H. R., Magnuson, P., Herbert, L., & Whiffler, L. A. 1991. The development of laying workers in field colonies of the Cape honey bee. Journal of Apicultural Research, 30, 107-112.
+
+In their first experiment, the authors exposed workers to a mated queen or a virgin queen, and then measured ovary activation. Not a perfect experiment with regards to queen pheromones since the queen's behaviour might also differ, but I included here for completeness.
+```{r}
+hepburn1991 <- data.frame(treatment = c("Control - virgin queen", "Mated queen"),
+                          developed = round(c(550 * (0.335+0.025), 600 * (0.257+0.007))),
+                          undeveloped = round(c(550 * 0.64, 600 *0.736)))
+hepburn1991 <- summary(glm(cbind(developed,undeveloped)~treatment, data=hepburn1991, family=binomial))$coefficients
+hepburn1991 <- foo("hepburn1991", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 1150, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, hepburn1991)
+```
+
+
+### Kaatz et al. 1992: _Apis mellifera_
+Kaatz, H. H., Hildebrandt, H., & Engels, W. 1992. Primer effect of queen pheromone on juvenile hormone biosynthesis in adult worker honey bees. Journal of Comparative Physiology B: Biochemical, Systemic, and Environmental Physiology, 162, 588-592.
+
+The authors treated workers with a solvent control, mandibular gland extract, or 3 different doses of synthetic 9-ODA. The response variable was juvenile hormone synthesis rate (in vitro, using a dissected corpora allata). Juvenile hormone is gonadotropic, so this is a proxy for fecundity. Data collected from Table 2.
+```{r}
+kaatz1992 <- rbind(mes(2.84, 2.81, 0.28, 0.62, 5, 9, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor),
+                   mes(2.71, 2.81, 0.62, 0.62, 5, 9, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor),
+                   mes(1.12, 2.81, 0.24, 0.62, 10, 9, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor),
+                   mes(1.08, 2.81, 0.38, 0.62, 5, 9, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)) 
+names(kaatz1992) <- c("LOR", "LowerCI", "UpperCI")
+kaatz1992 <- data.frame(Taxon = "Honeybee",
+                        Species = "Apis mellifera",
+                        Study = "kaatz1992",
+                        Blind = "NotBlind",
+                        Treatment = c("9-ODA (0.0001 QE)", "9-ODA (0.001 QE)", "9-ODA (0.01 QE)", "Mandibular gland extract"),
+                        Fertility.signal = "Yes",
+                        kaatz1992,
+                        p = c(0.92, 0.78, 0.0001, 0.0001),
+                        n = c(14, 14, 19, 14),
+                        Source = "Difference in means",
+                        Covariates = 0,
+                        Response = "Juvenile hormone titre",
+                        row.names = NULL)
+all.data <- rbind(all.data, kaatz1992)
+```
+
+### DeGrandi-Hoffman & Martin 1993: _Apis mellifera_
+DeGrandi-Hoffman, G. & Martin, J.H. 1993. Behaviour of egg-laying virgin and mated queen honey bees (_Apis mellifera_ L.) and the composition of brood in their colonies. Journal of Apicultural Research, 32:1, 19-26.
+
+These authors housed workers with either mated or virgin queens, and measured ovary development. Because the freqeuncy of ovary development in the group with mated queens was so low (often 0%), the GLMM did not run properly. I fixed this, crudely, by ensuring that at least one worker was recoded as having developed ovaries. Thus, the true effect size is likely to be slightly greater than reported here. The raw data are from the paper, and I typed them into a .csv file for convenience.
+
+```{r}
+degrandihoffman1993 <- read.csv("data/degrandi-hoffman1993.csv", stringsAsFactors = FALSE)
+degrandihoffman1993[is.na(degrandihoffman1993)] <- 0
+degrandihoffman1993$developed <- with(degrandihoffman1993, # add together recordings from the two bouts of data collection
+                                      category1.1 + category2.1 + category3.1 + category4.1 +
+                                        category2.1 + category2.2 + category3.2 + category4.2)
+degrandihoffman1993$undeveloped <- with(degrandihoffman1993, category0.1 + category0.2)
+degrandihoffman1993$undeveloped[degrandihoffman1993$developed == 0 ] <- degrandihoffman1993$undeveloped[degrandihoffman1993$developed == 0 ] - 1
+degrandihoffman1993$developed[degrandihoffman1993$developed == 0 ] <- 1
+degrandihoffman1993 <- summary(glmer(cbind(developed,undeveloped) ~ treatment + (1|colony), data=degrandihoffman1993, family=binomial))$coefficients
+degrandihoffman1993 <- foo("degrandihoffman1993", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 564, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, degrandihoffman1993)
+```
+
+
+### Wössler & Crewe 1999: _Apis mellifera_
+Wössler T.C., Crewe R.M. 1999 Honeybee queen tergal gland secretion affects ovarian development in caged workers. Apidologie 30, 311-320.
+
+Extracts of queen tergal glands were presented to queenless workers, whose ovaries were dissected and compared to those of controls.
+```{r}
+wossler1999 <- data.frame(treatment = c("Control", "Extract of queen tergal gland"),
+                          developed = c(66, 20),
+                          undeveloped = c(289, 228))
+wossler1999 <- summary(glm(cbind(developed,undeveloped)~treatment, data=wossler1999, family=binomial))$coefficients
+wossler1999 <- foo("wossler1999", "Apis mellifera", "Honeybee", "Blind", "Yes", 603, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, wossler1999)
+```
+
+
+### Grozinger et al. 2003: _Apis mellifera_
+Grozinger C.M., Sharabash N.M., Whitfield C.W., Robinson G.E. 2003 Pheromone-mediated gene expression in the honey bee brain. Proc Natl Acad Sci USA 100, 14519-14525.
+
+Data from one colony - bees were treated with QMP or a control. 
+```{r}
+grozinger2003 <- data.frame(treatment = factor(c("control","QMP"), c("control","QMP")), 
+                            developed = c(12, 1), 
+                            undeveloped = c(18, 29))
+
+grozinger2003 <- summary(glm(cbind(developed, undeveloped) ~ treatment, data=grozinger2003, family=binomial))$coefficients
+
+grozinger2003 <- foo("grozinger2003", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 60, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, grozinger2003)
+```
+
+### Hoover 2003 - experiment 1: _Apis mellifera_
+Hoover S.E., Keeling C.I., Winston M.L., Slessor K.N. 2003 The effect of queen pheromones on worker honey bee ovary development. Naturwissenschaften 90, 477-480.
+
+This experiment compared queenless controls to workers treated with A) a blend of 3 chemicals that are newly-identified queen pheromone components; B) queen mandibular pheromone, and C) the 3-chemical blend plus QMP. Worker ovaries were scored on a scale from 0-4, so I elected to treat workers with a score of 2 or greater as showing evidence of ovary activation. The experiment ran for 14 days.
+```{r}
+hoover2003.data <- read.csv("data/hoover2003.csv")
+hoover2003.data$ovary_score[hoover2003.data$ovary_score < 2] <- 0
+hoover2003.data$ovary_score[hoover2003.data$ovary_score >= 2] <- 1
+
+hoover2003.exp1 <- summary(glmer(ovary_score ~ treatment + (1|colony), family = "binomial", 
+                                 data = hoover2003.data %>% 
+                                   filter(experiment == 1)))$coefficients
+hoover2003.exp1 <- foo("hoover2003.exp1", "Apis mellifera", "Honeybee", "NotBlind", "Yes", c(280,310,280), "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, hoover2003.exp1)
+```
+
+### Hoover 2003 - experiment 2: _Apis mellifera_
+This time, the authors compared controls to workers treated with QMP, QMP plus an additional four compunds, or queen extract. The experiment ran for 10 days.
+```{r}
+hoover2003.exp2 <- summary(glmer(ovary_score ~ treatment + (1|colony), family = "binomial", 
+                                 data = hoover2003.data %>% 
+                                   filter(experiment == 2, !grepl("queenright", treatment))))$coefficients
+hoover2003.exp2 <- foo("hoover2003.exp2", "Apis mellifera", "Honeybee", "NotBlind", "Yes", c(60,60,60), "Raw data", 0, "Ovary activation")
+
+all.data <- rbind(all.data, hoover2003.exp2)
+```
+
+### Hefetz and Katzav-Gozansky 2004: _Apis mellifera_
+Hefetz, A., & Katzav-Gozansky, T. 2004. Are multiple honeybee queen pheromones indicators for a queen-workers arms race. Apiacta, 39, 44-52.
+
+Data are from Table 1. The authors presented workers with a queenless control, QMP alone, queen Dufour's gland contents alone, or both.
+```{r}
+hefetz2004 <- rbind(mes(100-65.7, 100-59.5, 4.1*sqrt(5), 8.1*sqrt(5), 5, 5, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor),
+                    mes(100-47.6, 100-59.5, 3.8*sqrt(4), 8.1*sqrt(5), 4, 5, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor),
+                    mes(100-67.5, 100-59.5, 4.2*sqrt(5), 8.1*sqrt(5), 5, 5, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)) 
+names(hefetz2004) <- c("LOR", "LowerCI", "UpperCI")
+hefetz2004 <- data.frame(Taxon = "Honeybee",
+                         Species = "Apis mellifera",
+                         Study = "hefetz2004",
+                         Blind = "NotBlind",
+                         Treatment = c("9-ODA", "Queen Dufour's gland", "9-ODA + queen Dufour's gland"),
+                         Fertility.signal = "Yes",
+                         hefetz2004,
+                         p = c(0.52, 0.28, 0.41),
+                         n = c(10, 9, 10),
+                         Source = "Difference in means",
+                         Covariates = 0,
+                         Response = "Ovary activation",
+                         row.names = NULL)
+all.data <- rbind(all.data, hefetz2004)
+```
+
+
+### Hoover et al. 2005: _Apis mellifera_
+Hoover, S. E., Winston, M. L., & Oldroyd, B. P. 2005. Retinue attraction and ovary activation: responses of wild type and anarchistic honey bees (_Apis mellifera_) to queen and brood pheromones. Behavioral Ecology and Sociobiology, 59, 278-284.
+
+Exposed workers to either a control, or one of three doses of an 8-component queen pheromone (i.e. 9-ODA, 9-HDA, HOB, HVA, MO, CA, PA and LEA). The experiment was performed on two colony types, wild and anarchistic, but I found that this variable was not a significant predictor of ovary development.
+```{r}
+hoover2005 <- read.csv("data/hoover2005.csv", stringsAsFactors = FALSE)
+hoover2005$treatment[hoover2005$treatment == "Q0.001"] <- "QMP: 0.001QE"
+hoover2005$treatment[hoover2005$treatment == "Q0.01"] <- "QMP: 0.01Q"
+hoover2005$treatment[hoover2005$treatment == "Q0.1"] <- "QMP: 0.1QE"
+response <- with(hoover2005, cbind(Score.2 + Score.3 + Score.4, # developed
+                                   Score.0 + Score.1)) # undeveloped
+hoover2005 <- summary(glmer(response ~ treatment + (1|colony), family = "binomial", data = hoover2005))$coefficients
+hoover2005 <- foo("hoover2005", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 24,  "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, hoover2005)
+```
+
+### Katzav-Gozansky et al. 2006: _Apis mellifera_
+Katzav-Gozansky T., Boulay R., Soroker V., Hefetz A. 2006 Queen pheromones affecting the production of queen-like secretion in workers. Journal of Comparative Physiology A 192, 737-742.
+
+The data were collected by extracting the means and SEs in Figure 1. 
+```{r}
+mean.in.control <- 62
+mean.in.QMP_and_Dufour <- 34
+n.in.control <- 8
+n.in.QMP_and_Dufour <- 10
+sd.in.control <- (73 - 62) * sqrt(n.in.control)
+sd.in.QMP_and_Dufour <- (51-34) * sqrt(n.in.QMP_and_Dufour)
+katzav_gozansky2006 <- mes(mean.in.QMP_and_Dufour,
+                           mean.in.control, 
+                           sd.in.QMP_and_Dufour,
+                           sd.in.control,
+                           n.in.QMP_and_Dufour,
+                           n.in.control, verbose = FALSE, dig = 6) %>% 
+  select(lOR, l.lor, u.lor)
+names(katzav_gozansky2006) <- c("LOR", "LowerCI", "UpperCI")
+katzav_gozansky2006 <- data.frame(Taxon = "Honeybee",
+                                  Species = "Apis mellifera",
+                                  Study = "katzav_gozansky2006",
+                                  Blind = "NotBlind",
+                                  Treatment = "QMP + Dufour's gland extract",
+                                  Fertility.signal = "Yes",
+                                  katzav_gozansky2006,
+                                  p = 0.22,
+                                  n = 18,
+                                  Source = "Difference in means",
+                                  Covariates = 0,
+                                  Response = "Ovary activation",
+                                  row.names = NULL)
+all.data <- rbind(all.data, katzav_gozansky2006)
+```
+
+
+### Peso et al. 2013: _Apis mellifera_
+Peso, M., Nino, E. L., Grozinger, C. M., & Barron, A. B. 2013. Effect of honey bee queen mating condition on worker ovary activation. Insectes Sociaux, 60, 123-133.
+
+```{r}
+peso2013 <- read.csv("data/peso2013.csv", stringsAsFactors = FALSE)[,1:3]
+peso2013$treatment[peso2013$treatment == "natmate"] <- "Naturally-mated queen"
+peso2013$treatment[peso2013$treatment == "SDI"] <- "Artif. inseminated queen"
+peso2013$treatment[peso2013$treatment == "virgCO2"] <- "Laying virgin queen"
+peso2013$treatment <- relevel(factor(peso2013$treatment), ref = "virgin")
+peso2013 <- summary(glmer(developed ~ treatment + (1|rep), data = peso2013, family = "binomial"))$coefficients
+peso2013 <- foo("peso2013", "Apis mellifera", "Honeybee", "NotBlind", "Yes", c(773,652,762), "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, peso2013)
+```
+
+### Duncan et al. 2015: _Apis mellifera_
+Duncan, E. J., Hyink, O., & Dearden, P. K. 2016. Notch signalling mediates reproductive constraint in the adult worker honeybee. Nature Communications, 7.
+
+I obtained the data from Figure 1, and elected not to use the bees treated with DAPT. Bees with an ovary score of 2 or 3 were counted as having activated ovaries.
+```{r}
+duncan2015 <- data.frame(treatment = c("control", "QMP"),
+                         developed = c(57+98, 22+28),
+                         undeveloped = c(106+90, 199+129))
+duncan2015 <- summary(glm(cbind(developed, undeveloped) ~ treatment, family = "binomial", data = duncan2015))$coefficients
+duncan2015 <- foo("duncan2015", "Apis mellifera", "Honeybee", "NotBlind", "Yes", 729, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, duncan2015)
+```
+
+
+### Tan et al. 2015: _Apis cerana_
+Tan K., Liu X., Dong S., Wang C., Oldroyd B.P. 2015 Pheromones affecting ovary activation and ovariole loss in the Asian honey bee _Apis cerana_. J Insect Physiol 74, 25-29.
+
+This study exposed workers to a control or one of six queen pheromone components: 10-HDA, 10-HDAA, 9-HDA, 9-ODA, HOB, and a mixture of all of them. The authors also measured ovariole number, but I decided that the presence/absence of oocytes in the ovaries was a better measure of potential fecundity.
+
+There was no variance in the 9-ODA treatment (all workers were sterile), which caused the model to give an implausible estimate for the effect of 9-ODA. I solved this crudely, by changing the data for a single worker, and making it fertile instead of sterile.
+
+```{r}
+tan2015 <- read.csv("data/tan2015.csv", stringsAsFactors = FALSE)  
+tan2015$ovary_development[tan2015$ovary_development < 2] <- 0 # I define ovary score >=2 as developed
+tan2015$ovary_development[tan2015$ovary_development > 0] <- 1
+
+tan2015$ovary_development[tan2015$treatment == "T9ODA"] <- c(1, tan2015$ovary_development[tan2015$treatment == "T9ODA"][-1])
+tan2015$treatment <- gsub("T", "", tan2015$treatment) # format treatment names nicely
+tan2015$treatment <- gsub("mix", "", tan2015$treatment)
+tan2015$treatment <- gsub("9", "9-", tan2015$treatment)
+tan2015$treatment <- gsub("10", "10-", tan2015$treatment)
+tan2015$treatment <- relevel(factor(tan2015$treatment), ref = "control")
+tan2015 <- summary(glmer(ovary_development ~ treatment + (1|colony), family = "binomial", data = tan2015))$coefficients
+tan2015 <- foo("tan2015", "Apis cerana", "Honeybee", "NotBlind", "Yes", 120, "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, tan2015)
+```
+
+
+### Ronai et al. 2016: _Apis mellifera_
+Ronai, I., Oldroyd, B. P., & Vergoz, V. 2016. Queen pheromone regulates programmed cell death in the honey bee worker ovary. Insect Molecular Biology, 25, 646-652.
+
+This study measured the effect of QMP on the expression of the enzyme caspase in the worker ovary. The enzyme is involved in programmed cell death, suggesting it is reasonable to use as a proxy for fecundity. I have coded the data such that a negative effect size means more cell death in the QMP treatment. I obtained the chi square statistic and sample size from the supplementary tables. 
+```{r}
+ronai2016 <- (-1 * chies(chi.sq = 3.943, n = 60, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor))[c(1,3,2)]
+names(ronai2016) <- c("LOR", "LowerCI", "UpperCI")
+ronai2016 <- data.frame(Taxon = "Honeybee",
+                        Species = "Apis mellifera",
+                        Study = "ronai2016",
+                        Blind = "NotBlind",
+                        Treatment = "QMP",
+                        Fertility.signal = "Yes",
+                        ronai2016,
+                        p = 0.046, # p-value from the paper
+                        n = 60,
+                        Source = "Summary statistics",
+                        Covariates = 0,
+                        Response = "Ovary activation",
+                        row.names = NULL)
+all.data <- rbind(all.data, ronai2016)
+```
+
+
+## Wasps
+
+### Dapporto et al. _Polistes gallicus_
+Dapporto, L., Santini, A., Dani, F. R., & Turillazzi, S. 2007. Workers of a _Polistes_ paper wasp detect the presence of their queen by chemical cues. Chemical Senses, 32: 795-802.
+
+In this study, the authors housed groups of queenless workers on a piece of nest material. In the control, the workers were removed from the nest for 2h every day, and in the experimental group, the workers were removed and a queen was placed on the nest while they were gone. So, the experiment measured the effect of exposure to queen-derived odours on the nest. Queens were observed, and the frequency with which they stroked the nest material was recorded - queens that stroked a lot tended to inhibit the workers more, so I included this variable in my model. I collected the raw data by measuring Figure 2, and re-analysed the data using survival analysis, since the response variable is the number of days until the start of egg laying. 
+
+```{r}
+dapporto2007 <- data.frame(days.until.eggs = c(rep(1,4), rep(2,7), rep(3,5), rep(4,5), rep(1,5), rep(2,5), rep(3,4), rep(4,2)),
+                           stroking.freq = c(rep(0, 21), 0, 1.1, 1.5, 1.8, 1.8, 4.5, 1.6, 1.8, 4.9, 5.1, 3.6, 3.8, 5.4, 7.7, 3.8, 5.9),
+                           treatment = c(rep("control", 21), rep("Queen odours", 16)))
+dapporto2007$treatment <- relevel(dapporto2007$treatment, ref = "Queen odours")
+
+# Now let's code the events, necessary for censoring (not that there is any here, at least as far as the paper says)
+events <- rep(1, nrow(dapporto2007))
+
+# Fit a mixed effects Cox mixed model, with Gaussian random effects
+# (I think this is the simplest type of mixed effect survival analysis)
+model <- coxph(Surv(days.until.eggs, events, type="right") ~ treatment + stroking.freq, data=dapporto2007)
+
+# Calculate the log hazard ratio between the control and the two CHC treatments
+# This number is negative if the CHC increases the expected time to egg laying
+dapporto2007 <- summary(contrast(lsmeans(model, list(~treatment)), method="trt.vs.ctrl")) %>% as.data.frame()
+dapporto2007 <- data.frame(dapporto2007[,c(2,3,5,6)])
+rownames(dapporto2007) <- c("Queen odours")
+
+dapporto2007 <- foo("dapporto2007", "Polistes gallicus", "Wasp", "Blind", "Yes", 37, "Raw data", 1, "Time until laying")
+all.data <- rbind(all.data, dapporto2007)
+```
+
+### Van Oystaeyen et al. 2014: _Vespula vulgaris_
+Van Oystaeyen, A., et al. 2014. Conserved class of queen pheromones stops social insect workers from reproducing. Science, 343, 287-290.
+
+Wasp colonies were split into fifths, and treated with either a control (solvent only) or one of the fertility-related CHCs $C_{27}$, $C_{28}$, $C_{29}$ or $3-MeC_{29}$. The authors recorded colony size, but it was not a significant predictior of worker ovary development, and so it is here left out of the model.
+```{r}
+vanoystaeyen2014.wasps <- read.table("data/Van Oystaeyen et al wasps.txt", header=TRUE) %>%
+  mutate(treatment = relevel(Treatment, ref = "Control"))
+vanoystaeyen2014.wasps <- summary(glmer(Reproductive ~ treatment  + (1|Colony_nr), family = "binomial", data = vanoystaeyen2014.wasps))$coefficients
+vanoystaeyen2014.wasps <- foo("vanoystaeyen2014.wasps", "Vespula vulgaris", "Wasp", "Blind", "Yes", c(1527, 1830, 1592, 1688), "Raw data", 1, "Ovary activation")
+all.data <- rbind(all.data, vanoystaeyen2014.wasps)
+```
+
+### Oi et al. 2016: _Dolichovespula saxonica_
+Oi, C.A., Millar, J.G., van Zweden, J.S., Wenseleers, T. 2016. Conservation of queen pheromones across two species of vespine wasps. J Chem Ecol 42: 1175–1180.
+
+Wasp colonies were split in half, and treated with either a control (solvent only) or a blend of fertility-related CHCs ($n$-$C_{29}$, 3-$MeC_{29}$, $n$-$C_{30}$, $n$-$C_{31}$ and 3-$MeC_{31}$). The authors recorded colony size, but it was not a significant predictior of worker ovary development, and so it is here left out of the model.
+```{r}
+oi2016 <- read.csv("data/Dissections Ds_final.csv")
+oi2016$treatment <- relevel(oi2016$treatment, ref = "control")
+response <- with(oi2016, cbind(developed, undeveloped))
+oi2016 <- summary(glmer(response ~ treatment +  (1|colony), family = "binomial", data = oi2016))$coefficients
+oi2016 <- foo("oi2016", "Dolichovespula saxonica", "Wasp", "Blind", "Yes", 376, "Raw data", 1, "Ovary activation")
+all.data <- rbind(all.data, oi2016)
+```
+
+
+## Ants
+
+### Fletcher and Blum 1981: _Solenopsis invicta_
+Fletcher, D. J., & Blum, M. S. 1981. Pheromonal control of dealation and oogenesis in virgin queen fire ants. Science, 212, 73-75.
+
+The study measures the effect of a live, fertile queens on the reproductive physiology of other queens, when she is either behind a double mesh (preventing contact), or a single mesh (allowing touching and trophallaxis). The response variable is wing-shedding rate in winged queens.
+
+
+```{r}
+fletcher1981 <- mes(1.8, 3.3, 1.4, 1.6, 12, 12, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)
+names(fletcher1981) <- c("LOR", "LowerCI", "UpperCI")
+fletcher1981 <- data.frame(Taxon = "Ant",
+                           Species = "Solenopsis invicta",
+                           Study = "fletcher1981",
+                           Blind = "NotBlind",
+                           Treatment = "Caged queen",
+                           Fertility.signal = "Yes",
+                           fletcher1981,
+                           p = 0.03, # p-value from mes function
+                           n = 24,
+                           Source = "Difference in means",
+                           Covariates = 0,
+                           Response = "Wing shedding",
+                           row.names = NULL)
+all.data <- rbind(all.data, fletcher1981)
+```
+
+
+### Vargo 1992: _Solenopsis invicta_
+Vargo, E. L. 1992. Mutual pheromonal inhibition among queens in polygyne colonies of the fire ant _Solenopsis invicta_. Behav. Ecol. Sociobiol. 31, 205–210.
+
+The study measures the effect of dead, fertile queens on the reproductive physiology of other queens, with a dead non-fertile queen as a control. The response variable is wing-shedding rate in winged queens.
+
+```{r}
+vargo1992.exp1 <- mes(0, 1.2, 0.32*sqrt(9), 0.4*sqrt(9), 9, 9, verbose = FALSE, dig = 6) %>% # means and SD measured from Figure 1
+  select(lOR, l.lor, u.lor) %>% rename(LOR = lOR, LowerCI=l.lor, UpperCI=u.lor)
+vargo1992.exp2 <- mes(-0.83, 0.01, 0.23*sqrt(6), 0.5*sqrt(6), 6, 6, verbose = FALSE, dig = 6) %>% 
+  select(lOR, l.lor, u.lor) %>% rename(LOR = lOR, LowerCI=l.lor, UpperCI=u.lor)
+
+vargo1992.exp1 <- data.frame(Taxon = "Ant", # exp1 measures the response in the inseminated queens
+                             Species = "Solenopsis invicta", 
+                             Study = "vargo1992.exp1", 
+                             Blind = "NotBlind",
+                             Treatment = "Dead fecund queen", 
+                             Fertility.signal = "Yes",
+                             vargo1992.exp1,
+                             p = 0.04, # p-value estimated by the mes() function
+                             n = 18,
+                             Source = "Difference in means",
+                             Covariates = 0,
+                             Response = "Wing shedding",
+                             row.names = NULL)
+
+vargo1992.exp2 <- data.frame(Taxon = "Ant",  # exp2 measures the response in the un-inseminated queens
+                             Species = "Solenopsis invicta", 
+                             Study = "vargo1992.exp2", 
+                             Blind = "NotBlind",
+                             Treatment = "Dead fecund queen", 
+                             Fertility.signal = "Yes",
+                             vargo1992.exp2,
+                             p = 0.18, # p-value estimated by the mes() function
+                             n = 12,
+                             Source = "Difference in means",
+                             Covariates = 0,
+                             Response = "Wing shedding",
+                             row.names = NULL)
+
+all.data <- rbind(all.data, vargo1992.exp1, vargo1992.exp2)
+```
+
+### Vargo 1999: _Solenopsis invicta_
+Vargo, E. L. 1999. Reproductive development and ontogeny of queen pheromone production in the fire ant _Solenopsis invicta_. Physiological Entomology, 24, 370-376.
+
+The study measures the effect of dead, fertile queens on the reproductive physiology of other queens, with a dead non-fertile queen as a control. The response variable is wing-shedding rate in winged queens.
+
+
+Data were collected from Figure 5, using data for day 0 and 3 (the first day in which queens elicited full-strength attract of workers; Fig 3).
+```{r}
+vargo1999 <- mes(27, 57, 2.5*sqrt(20), 7.2*sqrt(20), 20, 20, verbose=FALSE) %>% select(lOR, l.lor, u.lor)
+names(vargo1999) <- c("LOR", "LowerCI", "UpperCI")
+vargo1999 <- data.frame(Taxon = "Ant",
+                        Species = "Solenopsis invicta",
+                        Study = "vargo1999",
+                        Blind = "NotBlind",
+                        Treatment = "Dead fecund queen",
+                        Fertility.signal = "Yes",
+                        vargo1999,
+                        p = 0.0001, # p-value from mes function
+                        n = 40,
+                        Source = "Difference in means",
+                        Covariates = 0,
+                        Response = "Wing shedding",
+                        row.names = NULL)
+all.data <- rbind(all.data, vargo1999)
+```
+
+### Endler et al. 2004: _Camponotus floridanus_
+
+This study exposed workers to queen-laid eggs, or not, and then recorded whether the workers reproduced. The authors infer that the queen-specific hydrocarbons on the eggs mediated the eggs' effect on worker fecundity, but this isn't an ideal experiment, because the presence/absence of the eggs themselves is a confounding factor. 
+
+I considered using survival analysis, since the response variable is time until workers laid eggs. However one group never laid eggs, so one cannot estimate the rate of egg-laying in this group, and survival analysis models will fail. Instead I used a chi-square test, with the response variable being the number of colonies that eventually laid eggs, or did not lay eggs, within the 160 day timeframe. I only included the larvae+pupae and eggs+larvae+pupae treatments, as only these treatments are pertinent to the question of whether queen-laid eggs affect worker fecundity.
+
+```{r warning=FALSE}
+endler2004 <- chisq.test(as.table(matrix(c(0,19,8,11),nrow=2))) %>% unlist %>% as.numeric()
+endler.p <- endler2004[3]
+endler2004 <- ((chies(endler2004[1], 38, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)) * -1)[c(1,3,2)]
+names(endler2004) <- c("LOR", "LowerCI", "UpperCI")
+
+endler2004 <- data.frame(Taxon = "Ant",
+                         Species = "Camponotus floridanus",
+                         Study = "endler2004",
+                         Blind = "NotBlind",
+                         Treatment = "Queen-laid eggs",
+                         Fertility.signal = "Yes",
+                         endler2004,
+                         p = endler.p, # p-value from chies function
+                         n = 38,
+                         Source = "Summary statistics",
+                         Covariates = 0,
+                         Response = "Eggs laid (yes or no)",
+                         row.names = NULL)
+all.data <- rbind(all.data, endler2004)
+```
+
+### Holman et al. 2010: _Lasius niger_
+Holman, L., Jørgensen, C. G., Nielsen, J., & d'Ettorre, P. 2010. Identification of an ant queen pheromone regulating worker sterility. Proc Roy Soc B, 277, 3793-3800.
+
+Worker ants from each colony were exposed to a control, $C_{31}$ (not associated with fecundity), or 3-$MeC_{31}$.
+The study used an ordinal ovary score, here converted to a binary variable.
+
+```{r}
+holman2010 <- read.csv("data/holman2010.csv")
+holman2010$treatment <- relevel(holman2010$treatment, ref = "Pentane")
+holman2010$activated <- 0
+holman2010$activated[holman2010$ovaryscore >= 2] <- 1
+holman2010 <- summary(glmer(activated ~ treatment +  (1|colony), family = "binomial", data = holman2010))$coefficients
+holman2010 <- foo("holman2010", "Lasius niger", "Ant", "Blind", c("Yes", "No"), c(321, 312), "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, holman2010)
+```
+
+### Holman et al. 2012: _Lasius niger_ queens
+Holman, L., Leroy, C., Jørgensen, C., Nielsen, J., & d’Ettorre, P. 2012. Are queen ants inhibited by their own pheromone? Regulation of productivity via negative feedback. Behavioral Ecology, 24, 380-385.
+
+This study exposed __queen__ _L. niger_ to $C_{31}$ or 3-$MeC_{31}$, and concluded that exposure to the pheromone reduces queen fecundity. The original study used a response variable I am now not sure was the clearest choice (it used NMDS to model the composition of a brood pile). For this meta-analysis, I have instead elected to simply tally up the number of large brood items (i.e. final-instar larvae and pupae/cocoons). The conclusions are qualitatively the same as the NMDS analysis.
+```{r}
+holman2012 <- read.csv("data/holman2012-2.csv")
+holman2012$treatment <- relevel(holman2012$treatment, ref = "Pentane")
+holman2012$number.of.large.brood <- with(holman2012, L3_larvae + pupae)
+holman2012 <- summary(glm(number.of.large.brood ~ treatment, family = "poisson", data = holman2012))$coefficients
+holman2012 <- foo("holman2012", "Lasius niger", "Ant", "Blind", c("Yes", "No"), c(39,39), "Raw data", 0, "Ovary activation")
+all.data <- rbind(all.data, holman2012)
+```
+
+### Holman et al. 2013: _Lasius flavus_
+Holman, L., Lanfear, R. & d'Ettorre, P. 2013, The evolution of queen pheromones in the ant genus _Lasius_. J. Evol. Biol. 17, 1549–1558.
+
+Worker ants from each colony were exposed to a control, $C_{31}$ (not associated with fecundity), or 3-$MeC_{31}$. I extracted the effect sizes from statistics given in the paper (i.e. the relevant z values given in the section titled "3-$MeC_{31}$ signals queen fertility and causes worker sterility in _Lasius flavus_")
+```{r}
+test1 <- tes(-8.6, 180, 180, verbose = F) # 3-mec31
+test2 <- tes(-1.7, 180, 180, verbose = F) # c31
+holman2013 <- rbind(test1[names(test1) %in% c("lOR", "l.lor", "u.lor")],
+                    test2[names(test2) %in% c("lOR", "l.lor", "u.lor")])
+names(holman2013) <- c("LOR",	"LowerCI",	"UpperCI")
+holman2013 <- data.frame(Taxon = "Ant",
+                         Species = "Lasius flavus",
+                         Study = "holman2013",
+                         Blind = "Blind",
+                         Treatment = c("3-MeC31", "C31"),
+                         Fertility.signal = c("Yes", "No"),
+                         holman2013, 
+                         p = c(0.0001, 0.0001),
+                         n = 360, 
+                         Source = "Summary statistics",
+                         Covariates = 0,
+                         Response = "Ovary activation",
+                         row.names = NULL)
+holman2013 <- rbind(all.data, holman2013)
+```
+
+### Holman et al. 2016: Three _Lasius_ species
+Holman, L., Hanley, B., & Millar, J. G. 2016. Highly specific responses to queen pheromone in three Lasius ant species. Behav Ecol Sociobiol, 70, 387-392.
+
+This study performed the same experiment in three different _Lasius_ species. Worker ants from each colony were exposed to a control, or one of the hydrocarbons $C_{31}$, 3-$MeC_{25}$, 3-$MeC_{31}$, 3-$MeC_{33}$, or 3-$MeC_{35}$.
+
+```{r}
+holman2016 <- read.csv("data/holman2016.csv", stringsAsFactors = FALSE)
+holman2016$treatment <- gsub("me", "Me", holman2016$treatment) %>% factor
+holman2016$treatment <- relevel(holman2016$treatment, ref = "Hexane")
+holman2016.flavus <- holman2016 %>% filter(species == "L. flavus") %>% select(-species)
+holman2016.niger <- holman2016 %>% filter(species == "L. niger") %>% select(-species)
+holman2016.lasioides <- holman2016 %>% filter(species == "L. lasioides") %>% select(-species)
+rm(holman2016)
+
+holman2016.flavus <- summary(glmer(activated ~ treatment  + (1|colony), family = "binomial", data = holman2016.flavus))$coefficients
+holman2016.niger <- summary(glmer(activated ~ treatment + (1|colony), family = "binomial", data = holman2016.niger))$coefficients
+holman2016.lasioides <- summary(glmer(activated ~ treatment + (1|colony), family = "binomial", data = holman2016.lasioides))$coefficients
+
+holman2016.niger <- foo("holman2016.niger", "Lasius niger", "Ant", "Blind", c("No", "Yes", "Yes", "No", "No"), c(244, 226, 258, 259, 225), "Raw data", 0, "Ovary activation")
+holman2016.flavus <-  foo("holman2016.flavus", "Lasius flavus", "Ant", "Blind", c("No", "Yes", "No", "No", "No"), c(375, 359, 362, 340, 330), "Raw data", 0, "Ovary activation")
+holman2016.lasioides <-  foo("holman2016.lasioides", "Lasius lasioides", "Ant", "Blind", c("No", "Yes", "Yes", "Yes", "No"), c(333, 317, 284, 271, 293), "Raw data", 0, "Ovary activation")
+
+all.data <- rbind(all.data, holman2016.niger, holman2016.flavus, holman2016.lasioides)
+```
+
+
+### Motais de Narbonne et al. 2016 _J Exp Biol_: _Lasius niger_
+Motais de Narbonne M., van Zweden J.S., Bello J.E., Wenseleers T., Millar J.G., d'Ettorre P. 2016 Biological activity of the enantiomers of 3-methylhentriacontane, a queen pheromone of the ant _Lasius niger_. J Exp Biol 219, 1632-1638.
+
+These authors exposed _Lasius niger_ workers to a control, the R and S enantiomers of 3-$MeC_{31}$ individually, or a mixture of both enantiomers, and then scored the number of fertile workers. The effect sizes were calculated in the original study as odds ratios, and I have here converted them to log odds ratios.
+
+```{r}
+motais_de_narbonne2016 <- data.frame(Treatment = c("(R)+(S)-3-MeC31", "(R)-3-MeC31", "(S)-3-MeC31"),
+                                     LOR = log(c(1/1.63, 1/1.49, 1/1.46)),
+                                     LowerCI = log(c(1/2.43,	1/2.22,	1/2.13)),
+                                     UpperCI = log(c(1/1.10,	1/1.01,	1/1.00)))
+motais_de_narbonne2016 <- data.frame(Taxon = "Ant", 
+                                     Species = "Lasius niger", 
+                                     Study = "motais_de_narbonne2016",  
+                                     Blind = "Blind",
+                                     Fertility.signal = "Yes",
+                                     motais_de_narbonne2016,
+                                     p = c(0.003, 0.015, 0.015), # p vals from the paper
+                                     n = c(657, 660, 720),
+                                     Source = "Raw data",
+                                     Covariates = 0,
+                                     Response = "Ovary activation",
+                                     row.names = NULL)
+all.data <- rbind(all.data, motais_de_narbonne2016)
+```
+
+
+### Van Oystaeyen et al. 2014: _Cataglyphis iberica_
+Van Oystaeyen, A., et al. 2014. Conserved class of queen pheromones stops social insect workers from reproducing. Science, 343, 287-290.
+
+Worker ants from each colony were exposed to a control, or one of the queen-like hydrocarbons $C_{27}$, $C_{29}$, 3-$MeC_{27}$, or 3-$MeC_{29}$.
+```{r}
+vanoystaeyen2014.ants <- read.csv("data/Van Oystaeyen et al ants.csv", header=TRUE) %>% 
+  mutate(fertile = 0, 
+         fertile = replace(fertile, type %in% c("three", "four"), 1), 
+         treatment = relevel(treatment, ref = "control"))
+vanoystaeyen2014.ants <- summary(glmer(fertile ~ treatment + size + (1|colony), family = "binomial", data = vanoystaeyen2014.ants))$coefficients
+vanoystaeyen2014.ants <- vanoystaeyen2014.ants[-6,] # remove worker size covariate
+
+vanoystaeyen2014.ants <- foo("vanoystaeyen2014.ants", "Cataglyphis iberica", "Ant", "Blind", "Yes", c(294, 267, 282, 270), "Raw data", 1, "Ovary activation")
+all.data <- rbind(all.data, vanoystaeyen2014.ants)
+```
+
+
+### Smith et al. 2015: _Odontomachus brunneus_
+Smith, A. A., Millar, J. G., & Suarez, A. V. 2015. A social insect fertility signal is dependent on chemical context. Biology letters, 11, 20140947.
+
+This study split ant colonies three ways, and treated the sub-colonies with either a solvent-only control, $C_{27}$ (unrelated to fertility), or z-9-$C_{29:1}$ (a putative queen pheromone). 
+
+I obtained the raw data from the authors, and re-did the statistical analysis. The data are censored time series data - it is the number of days until eggs were laid - so we need a survival analysis. It's also a multi-level experiment, since each colony was split and used in all 3 treatments. So, I used a Cox mixed effects model. The original study used a Cochrane Q-test, necessitating the removal from the dataset of colonies that did not lay eggs (which are  informative data), and which neglects the potential non-independence of worker groups drawn from the same colony.
+```{r}
+smith2015 <- read.csv("data/smith2015.csv")
+smith2015$treatment <- relevel(smith2015$treatment, ref = "hex")
+smith2015$initial.worker.number <- scale(smith2015$initial.worker.number)
+
+# The colonies that never laid eggs were coded as NA and omitted from the original analysis, 
+# but rather than leave out these data, we can code them as '45' (the last day they were checked for eggs),
+# and include them as censored data (it's important not to exclude the non-laying ones
+# if you want to measure the effect of treatment on time-until-laying)
+smith2015$days.until.eggs[is.na(smith2015$days.until.eggs)] <- 45
+
+# Now let's code the events, necessary for censoring
+events <- rep(1, nrow(smith2015))
+events[smith2015$days.until.eggs == 45] <- 0
+
+# Fit a mixed effects Cox mixed model, with Gaussian random effects
+# (I think this is the simplest type of mixed effect survival analysis)
+model <- coxme(Surv(days.until.eggs, events, type="right") ~ treatment + initial.worker.number + (1|colony), data=smith2015)
+
+# Calculate the log hazard ratio between the control and the two CHC treatments
+# This number is negative if the CHC increases the expected time to egg laying
+smith2015 <- summary(contrast(lsmeans(model, list(~treatment)), method="trt.vs.ctrl")) %>% as.data.frame()
+smith2015 <- data.frame(smith2015[,c(2,3,5,6)])
+rownames(smith2015) <- c("C27", "Z-9-C29:1")
+smith2015 <- foo("smith2015", "Odontomachus brunneus", "Ant", "NotBlind", c("No", "Yes"), c(26, 26), "Raw data", 1, "Time until laying")
+all.data <- rbind(all.data, smith2015)
+```
+
+
+## _Bombus_ bumblebees
+
+### Van Honk 1980: _Bombus terrestris_
+Van Honk, C. , Velthuis, H. H. W., Röseler, P. F., & Malotaux, M. E. (1980). The mandibular glands of _Bombus terrestris_ queens as a source of queen pheromones. Entomologia Experimentalis et Applicata, 28, 191-198.
+
+These authors either removed the mandibular gland from a live queen, or did a sham operation, and then recorded how many days workers took to begin laying eggs (on 15 colony fragments). I extracted the raw data from Table 1, and performed a mixed effects cox regression (since this is a time series analysis with repeated measures of certain colonies).
+
+```{r}
+operted.queens <- c(15,12,14,32,13,24,42,47,15) # queens with gland removed
+colony.operted <- c("M18", "M21", "M21", "M26", "M27", "J13", "J15", "K9", "K12")
+Queen.mandibular.gland <- c(44,49,52,35,45,34) # sham queens with intact gland
+colony.mandib <- c("M21", "M27", "J8", "W1", "W2", "W10")
+
+vanhonk1980 <- data.frame(days.til.laying = c(operted.queens, Queen.mandibular.gland),
+                          treatment = c(rep("operted.queens", length(operted.queens)),
+                                        rep("Queen.mandibular.gland", length(Queen.mandibular.gland))),
+                          colony = c(colony.operted, colony.mandib))
+
+# Now let's code the events, necessary to run the model
+# Every colony eventually laid eggs, so there is no censoring
+events <- rep(1, nrow(vanhonk1980))
+
+# Fit a mixed effects Cox mixed model, with Gaussian random effects
+# (I think this is the simplest type of mixed effect survival analysis)
+# The model prints to the console by default, so I silenced it with capture.output() to make a neater Markdown report.
+shhh <- capture.output(model <- summary(coxme(Surv(days.til.laying, events, type="right") ~ treatment + (1|colony), data = vanhonk1980)))
+
+# Calculate the log hazard ratio between the control and the two CHC treatments
+# This number is negative if the mandibular gland increases the expected time to egg laying
+vanhonk1980 <- summary(contrast(lsmeans(model, list(~treatment)), method="trt.vs.ctrl")) %>% as.data.frame()
+vanhonk1980 <- data.frame(vanhonk1980[,c(2,3,5,6)])
+rownames(vanhonk1980) <- c("Queen mandibular gland")
+vanhonk1980 <- foo("vanhonk1980", "Bombus terrestris", "Bumblebee", "NotBlind", "Yes", 15, "Raw data", 1, "Time until laying")
+all.data <- rbind(all.data, vanhonk1980)
+```
+
+### Block and Heftz 1999: _Bombus terrestris_
+Bloch, G., & Hefetz, A. 1999. Reevaluation of the role of mandibular glands in regulation of reproduction in bumblebee colonies. Journal of Chemical Ecology, 25, 881-896.
+
+These authors exposed workers to various queen-derived chemicals, then measured juvenile hormone biosynthesis in the workers. This hormone is associated with higher fecundity, so it is a metric of workers' reproductive potential. The data were collected from Tables 2 and 3. I didn't include the data on any gland besides Dufour's and the mandibular gland, because to my knowledge we don't know if their contents are associated with fertility or not.
+```{r}
+# whole queen wash - Table 2
+queen.wash <- mes(38.9, 47.3, 
+                  2.4*sqrt(45), 3.5*sqrt(27), 
+                  45, 27, verbose=FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)
+
+# Mandibular gland - Table 3
+control.mean <- (34.6+48.1)/2
+control.se <- ((5.3+3.9)/2)*sqrt(15+24)
+control.n <- 15+24
+mandib.gland <- mes((33+49.1)/2, control.mean, 
+                    ((3.1+3.4)/2)*sqrt(24+17), control.se, 
+                    24+17, control.n, verbose=FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)
+
+# Dufour's gland - Table 3
+dufours.gland <- mes((38.9+36.5)/2, control.mean, 
+                     ((5.4+3.9)/2)*sqrt(15+21), control.se, 
+                     15+21, control.n, verbose=FALSE) %>% select(lOR, l.lor, u.lor)
+
+bloch1999 <- rbind(queen.wash, mandib.gland, dufours.gland)
+
+names(bloch1999) <- c("LOR", "LowerCI", "UpperCI")
+bloch1999 <- data.frame(Taxon = "Bumblebee", 
+                        Species = "Bombus terrestris", 
+                        Study = "bloch1999", 
+                        Blind = "NotBlind",
+                        Treatment = c("Queen extract", "Queen mandibular gland", "Queen dufour's gland"), 
+                        Fertility.signal = "Yes",
+                        bloch1999,
+                        p = c(0.048, 0.96, 0.58), # p-value estimated by the mes() function
+                        n = c(72, 80, 75),
+                        Source = "Difference in means",
+                        Covariates = 0,
+                        Response = "Ovary activation",
+                        row.names = NULL)
+all.data <- rbind(all.data, bloch1999)
+```
+
+### Alaux et al. 2004: _Bombus terrestris_
+Alaux, C., Jaisson, P., & Hefetz, A. 2004. Queen influence on worker reproduction in bumblebees (_Bombus terrestris_) colonies. Insectes Sociaux, 51, 287-293.
+
+In their first experiment, the authors either exposed queenless workers to the volatile odours of a queen, or nothing. The paper contains other experiments, but I did not include them because the presence/absence of the queen's chemicals were not manipulated independently of the presence/absence of the queen. Thus, the experiment cannot ascertain whether it is the pheromones, or something else (e.g. queen behaviour) that affected the workers. The results for experiment 1 were obtained from the Results section (sentence beginning "The average worker oviposition...").
+
+As for the Padilla et al. paper, I think there is no data on whether queens produce volatiles, or if these volatiles signal fecundity. Thus, I coded this one as _not_ a fertility signal.
+
+```{r}
+alaux2004 <- mes(7.63, 7.70, 0.48*sqrt(11), 0.67*sqrt(10), 11, 10, verbose=FALSE) %>% select(lOR, l.lor, u.lor)
+names(alaux2004) <- c("LOR", "LowerCI", "UpperCI")
+alaux2004 <- data.frame(Taxon = "Bumblebee", 
+                        Species = "Bombus terrestris", 
+                        Study = "alaux2004", 
+                        Blind = "NotBlind",
+                        Treatment = "Queen volatiles", 
+                        Fertility.signal = "No",               
+                        alaux2004,
+                        p = 0.96, # p-value from the paper
+                        n = 21,
+                        Source = "Difference in means",
+                        Covariates = 0,
+                        Response = "Ovary activation",
+                        row.names = NULL)
+all.data <- rbind(all.data, alaux2004)
+```
+
+
+### Van Oystaeyen et al. 2014: _Bombus terrestris_
+Van Oystaeyen, A., et al. 2014. Conserved class of queen pheromones stops social insect workers from reproducing. Science, 343, 287-290.
+
+These authors applied a control or one of five fecundity-related chemicals (one hydrocarbon and four esters) to colonies of workers. Colonies were not split among treatments - four colonies were randomly assigned to treatments, and multiple workers were dissected per colony. The authors measured ovary regression. They also measured the number of eggs laid per colony fragment, but since n = 4 per treatment there is essentially no power to test among treatments using this method; hence, I chose to include the effect size measure for the ovary regression data. I include the (scaled) number of workers present in the colony as a covariate, as it is a signficant predictor of the frequency of ovary regression.
+```{r}
+vanoystaeyen2014.bumblebees <- read.csv2("data/Van Oystaeyen et al bumblebees.csv", stringsAsFactors = FALSE)
+# Give the esters their full names
+vanoystaeyen2014.bumblebees$treatment[vanoystaeyen2014.bumblebees$treatment == "C20"] <- "Docosyl oleate"
+vanoystaeyen2014.bumblebees$treatment[vanoystaeyen2014.bumblebees$treatment == "C22"] <- "Eicosyl oleate"
+vanoystaeyen2014.bumblebees$treatment[vanoystaeyen2014.bumblebees$treatment == "C24"] <- "Tetracosyl oleate"
+vanoystaeyen2014.bumblebees$treatment[vanoystaeyen2014.bumblebees$treatment == "C26"] <- "Hexacosyl oleate"
+vanoystaeyen2014.bumblebees$treatment <- relevel(factor(vanoystaeyen2014.bumblebees$treatment), ref = "Control")
+vanoystaeyen2014.bumblebees$oocyte_length <- as.numeric(vanoystaeyen2014.bumblebees$oocyte_length)
+vanoystaeyen2014.bumblebees$thorax <- as.numeric(vanoystaeyen2014.bumblebees$thorax)
+
+# Response variable is presence/absence of oocyte regression
+# This is the variable analysed in the original study
+vanoystaeyen2014.bumblebees$not.regressed <- vanoystaeyen2014.bumblebees$type
+vanoystaeyen2014.bumblebees$not.regressed[vanoystaeyen2014.bumblebees$not.regressed != 5] <- 1
+vanoystaeyen2014.bumblebees$not.regressed[vanoystaeyen2014.bumblebees$not.regressed == 5] <- 0
+relative.worker.number <- scale(vanoystaeyen2014.bumblebees$n_end)
+vanoystaeyen2014.bumblebees <- summary(glmer(not.regressed ~ treatment + relative.worker.number + (1|colony), family = "binomial", data = vanoystaeyen2014.bumblebees))$coefficients
+vanoystaeyen2014.bumblebees <- vanoystaeyen2014.bumblebees[-c(6, 8), ] # remove queenright treatment and worker number covariate from ES table
+
+vanoystaeyen2014.bumblebees <- foo("vanoystaeyen2014.bumblebees", "Bombus terrestris", "Bumblebee", "Blind", "Yes", c(692, 549, 525, 597, 526), "Raw data", 1, "Oocyte resorption")
+all.data <- rbind(all.data, vanoystaeyen2014.bumblebees)
+```
+
+
+### Holman 2014: _Bombus terrestris_
+Holman, L. 2014. Bumblebee size polymorphism and worker response to queen pheromone. PeerJ, 2, e604.
+
+Treated workers with either solvent control or $C_{25}$. Also recorded worker body size, which was a strong predictor of fecundity.
+```{r}
+holman2014 <- read.csv("data/holman_2014_peerj.csv") %>% mutate(treatment = relevel(treatment, ref = "control"))
+holman2014 <- summary(glmer.nb(oocyte_nr ~ treatment + worker_sizecat + (1|colony), data = holman2014))$coefficients
+holman2014 <- holman2014[1:2, ] # remove covariate from ES table
+holman2014 <- foo("holman2014", "Bombus terrestris", "Bumblebee", "Blind", "Yes", 502, "Raw data", 1, "Number of oocytes in ovary")
+all.data <- rbind(all.data, holman2014)
+```
+
+
+### Amsalem et al. 2015: _Bombus impatiens_
+This study exposed workers to $C_{23}$, $C_{25}$ and $C_{27}$ as two doses each, termed the "low" and "high" doses, which were 0.0006 and 0.006 queen equivalents per day, respectively (see Holman et al. 2017 _PeerJ_). 
+
+Additionally, workers were of two types, termed "naive" and "experienced", in light of the fact that the former had never encountered a live queen. Unfortunately, as outlined in Holman et al. 2017 _PeerJ_, the naive workers were also different in many other respects (e.g. age, size, colony origin, and social environment), making the role of experience _per se_ difficult to determine.
+
+Here, I have chosen the response variable from the study that best reflects worker fecundity - the number of eggs laid by each group of 3 workers. I also elected to split the data by worker type, and analyse them separately as two independent experiments. My rationale for analysing them separately is that worker type is confounded by age, size, and colony origin, and I think that Etya Amsalem told me during the review process of the _PeerJ_ paper that the two treatments were not conducted at the same time, meaning that they cannot be meaningfully compared.
+
+An additional problem when analysing them together is that the naive treatment was a mixture of workers from a unspecified mixture of colonies, and it's odd to just record the colony ID as "mixed" for them, but use the actual colony ID for the experienced workers. With this in mind, I included colony ID as a random effect for the experienced workers, but not for the naive workers.
+
+Lastly, I have coded all three hydrocarbons tested as fertility signals. This is because they are correlated with fertility - see Holman et al. 2017 _PeerJ_ (contra Amsalem et al, which calls them 'control' hydrocarbons).
+
+<!-- ```{r} -->
+<!-- amsalem2015 <- read.csv("data/amsalem2015.csv", stringsAsFactors = FALSE)  -->
+<!-- amsalem2015$treatment[amsalem2015$treatment == "c23-low"] <- "C23 - 0.0006QE" -->
+<!-- amsalem2015$treatment[amsalem2015$treatment == "c25-low"] <- "C25 - 0.0006QE" -->
+<!-- amsalem2015$treatment[amsalem2015$treatment == "c27-low"] <- "C27 - 0.0006QE" -->
+<!-- amsalem2015$treatment[amsalem2015$treatment == "c23-high"] <- "C23 - 0.006QE" -->
+<!-- amsalem2015$treatment[amsalem2015$treatment == "c25-high"] <- "C25 - 0.006QE" -->
+<!-- amsalem2015$treatment[amsalem2015$treatment == "c27-high"] <- "C27 - 0.006QE" -->
+<!-- amsalem2015$treatment <- relevel(factor(amsalem2015$treatment), ref = "hexane") -->
+<!-- amsalem2015 <- summary(glmer(total_eggs ~ treatment + (1|cage_id) + (1|colony_id), family = "poisson", data = amsalem2015))$coefficients -->
+<!-- amsalem2015 <- foo("amsalem2015", "Bombus impatiens", "Bumblebee", "Blind", "Yes", c(65, 53, 75, 72, 65, 55), "Raw data", 0, "Number of eggs laid") -->
+<!-- all.data <- rbind(all.data, amsalem2015) -->
+<!-- ``` -->
+
+
+```{r}
+amsalem2015 <- read.csv("data/amsalem2015.csv", stringsAsFactors = FALSE)
+amsalem2015$treatment[amsalem2015$treatment == "c23-low"] <- "C23 - 0.0006QE"
+amsalem2015$treatment[amsalem2015$treatment == "c25-low"] <- "C25 - 0.0006QE"
+amsalem2015$treatment[amsalem2015$treatment == "c27-low"] <- "C27 - 0.0006QE"
+amsalem2015$treatment[amsalem2015$treatment == "c23-high"] <- "C23 - 0.006QE"
+amsalem2015$treatment[amsalem2015$treatment == "c25-high"] <- "C25 - 0.006QE"
+amsalem2015$treatment[amsalem2015$treatment == "c27-high"] <- "C27 - 0.006QE"
+amsalem2015$treatment <- relevel(factor(amsalem2015$treatment), ref = "hexane")
+
+# Split the data by worker type: experienced and naive.
+amsalem2015.experienced <- amsalem2015 %>% filter(worker_type == "experienced")
+amsalem2015.naive <- amsalem2015 %>% filter(worker_type == "naive")
+rm(amsalem2015)
+
+amsalem2015.experienced <- summary(glmer(total_eggs ~ treatment + (1|colony_id), family = "poisson",
+                                         data = amsalem2015.experienced))$coefficients
+amsalem2015.experienced <- foo("amsalem2015.experienced", "Bombus impatiens", "Bumblebee", "Blind", "Yes", c(33, 43, 44, 46, 33, 43), "Raw data", 0, "Number of eggs laid")
+
+amsalem2015.naive <- summary(glm(total_eggs ~ treatment, family = "poisson",
+                                 data = amsalem2015.naive))$coefficients
+amsalem2015.naive <- foo("amsalem2015.naive", "Bombus impatiens", "Bumblebee", "Blind", "Yes", c(20, 22, 28, 29, 22, 22), "Raw data", 0, "Number of eggs laid")
+
+all.data <- rbind(all.data, amsalem2015.experienced, amsalem2015.naive)
+```
+
+
+### Padilla et al. 2016 _Royal Society Open Science_: _Bombus impatiens_
+Padilla, M., Amsalem, E., Altman, N., Hefetz, A., & Grozinger, C. M. 2016. Chemical communication is not sufficient to explain reproductive inhibition in the bumblebee _Bombus impatiens_. Roy Soc Open Sci, 3, 160576.
+
+Experiment 1 exposed workers to the airflow from a small colony containing a queen, or a control (air from a small colony without a queen). The authors then scored the number of eggs laid, as well as the size of the worker's oocytes and gene expression. Even though the egg laying data is the most direct measure, the sample size is very low (n = 15 in total). I thus elected to use the oocyte size data (n = 45 workers in 15 cages). As far as I know, the authors do not know whether queens actually produce volatiles, or if fertile and sterile individuals produce different volatile chemicals. I have therefore scored the volatiles as _not_ a fertility signal. 
+
+Experiment 2 exposed workers to a live queen in a cage, or a control. Workers could touch/smell the queen through the cage, but were prevented from interacting directly. The authors then scored the number of eggs laid, as well as the size of the worker's oocytes and gene expression. Even though the egg laying data is the most direct measure, the sample size is very low (n = 13 in total). I thus elected to use the oocyte size data (n = 78 workers in 26 cages).
+```{r}
+padilla2016.exp1 <- read.csv("data/padilla2016.exp1.csv", stringsAsFactors = FALSE) %>%
+  filter(treatment %in% c("air from QR", "air from QL")) %>%
+  mutate(treatment = replace(treatment, treatment == "air from QR", "Queen volatiles")) %>%
+  mutate(treatment = replace(treatment, treatment == "air from QL", "control"))
+
+padilla2016.exp1 <- summary(lmer(oocyte.size ~ treatment + (1|cage_id), data = padilla2016.exp1))$coefficients
+padilla2016.exp1 <- foo("padilla2016.exp1", "Bombus impatiens", "Bumblebee", "NotBlind", "No", 45, "Raw data", 0 , "Size of largest oocyte")
+
+padilla2016.exp2 <- read.csv("data/padilla2016.exp2.csv", stringsAsFactors = FALSE) %>%
+  filter(treatment2 != "Free queen") %>% # remove this trt - confounded by queen presence+behaviour
+  mutate(treatment = relevel(factor(treatment2), ref = "control")) 
+padilla2016.exp2 <- summary(lmer(oocyte.size ~ treatment + (1|cageID) + (1|trial), data = padilla2016.exp2))$coefficients
+padilla2016.exp2 <- foo("padilla2016.exp2", "Bombus impatiens", "Bumblebee", "NotBlind", "Yes", 78, "Raw data", 0 , "Size of largest oocyte")
+
+all.data <- rbind(all.data, padilla2016.exp1, padilla2016.exp2) 
+```
+
+### Amsalem et al. 2017: _Bombus impatiens_
+Amsalem, E., Padilla, M., Schreiber, P. M., Altman, N. S., Hefetz, A., & Grozinger, C. M. 2017. Do bumble bee, _Bombus impatiens_, Queens signal their reproductive and mating status to their workers?. Journal of Chemical Ecology, 43, 563-572.
+
+These authors extracted cuticular hydrocarbons from four kinds of queens, and compared their effects on workers' ovaries and egg laying rate relative to a control. I chose not to use the egg laying data, since the sample size for these is only n=6 per treatment. The oocyte size data have a sample size of n=18 per treatment. Only the treatment means and standard errors were available.
+
+Since the hypotheses under test here is that fertility-related CHCs affect worker reproduction, and because the sample size within any one treatment is low, I elected to pool treatments. Specifically, I pooled the "Mated, egg-laying queen CHCs" and "Virgin, egg-laying queen CHCs" treatments, since both of presented workers with CHCs from a fertile queen. The other three treatments, "Newly-mated queen", "Virgin queen", and "Control", should have contained lower amounts (or none, for the control) of fertility-related CHCs. Pooling the data in this fashion gave a sample size of 36 fertile-CHC-treated vs 54 control workers.
+```{r}
+group.means <- data.frame(treatment = c("Mated, egg-laying queen CHCs",
+                                        "Virgin, egg-laying queen CHCs",
+                                        "Newly-mated queen",
+                                        "Virgin queen",
+                                        "Control"),
+                          mean.oocyte.size = c(2.59, 2.66, 2.69, 2.71, 2.67),
+                          se.oocyte.size = c(0.07, 0.08, 0.05, 0.05, 0.07),
+                          mean.eggs = c(24.7, 18, 23.2, 22.7, 21.3),
+                          se.eggs = c(3.4, 3.7, 3.3, 2.2, 3.9))
+
+amsalem2017 <- mes(m.1  = mean(group.means$mean.oocyte.size[1:2]), 
+                   m.2  = mean(group.means$mean.oocyte.size[3:5]), 
+                   sd.1 = mean(group.means$se.oocyte.size[1:2] * sqrt(36)), 
+                   sd.2 = mean(group.means$se.oocyte.size[3:5] * sqrt(54)),
+                   n.1 = 36, 
+                   n.2 = 54, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)
+names(amsalem2017) <- c("LOR", "LowerCI", "UpperCI")
+amsalem2017 <- data.frame(Taxon = "Bumblebee", 
+                          Species = "Bombus impatiens", 
+                          Study = "amsalem2017", 
+                          Blind = "Blind",
+                          Fertility.signal = "Yes",
+                          Treatment = "Queen extract", 
+                          amsalem2017,
+                          p = 0.485, # p-value for this contrast estimated by the mes() function
+                          n = 90,
+                          Source = "Difference in means",
+                          Covariates = 0,
+                          Response = "Size of largest oocyte",
+                          row.names = NULL)
+all.data <- rbind(all.data, amsalem2017)
+```
+
+## Termites
+
+### Matsuura 2010: _Reticulitermes speratus_
+Matsuura K., Himuro C., Yokoi T., Yamamoto Y., Vargo E. L., Keller L. 2010. Identification of a pheromone regulating caste differentiation in termites. PNAS 107, 963–12.
+
+The authors applied synthetic pheromone to experimental colonies containing workers, and then recorded the number of workers that differentiated into reproductives (termite workers are sub-adults, and can develop into queens/kings when monarch dies). Effect size was estimated from F-statistics in the Results section (specifically, where it says "treatment: F2,38 = 19.66, P < 0.0001"). 
+
+```{r}
+matsuura2010 <- -1 * (fes(19.66, 20, 20, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor))
+matsuura2010 <- matsuura2010[,c(1,3,2)]
+names(matsuura2010) <- c("LOR", "LowerCI", "UpperCI")
+matsuura2010 <- data.frame(Taxon = "Termite", 
+                           Species = "Reticulitermes speratus", 
+                           Study = "matsuura2010", 
+                           Blind = "NotBlind",
+                           Fertility.signal = "Yes",
+                           Treatment = "n-butyl-n-butyrate and 2-methyl-1-butanol", 
+                           matsuura2010,
+                           p = 0.0001, # p-value from the paper
+                           n = 35,
+                           Source = "Summary statistics",
+                           Covariates = 0,
+                           Response = "Moulting rate",
+                           row.names = FALSE)
+all.data <- rbind(all.data, matsuura2010)
+```
+
+
+### Yamamoto and Matsuura 2011: _Reticulitermes speratus_
+Yamamoto Y, Matsuura K. 2011. Queen pheromone regulates egg production in a termite. Biol Lett. 7:727–729.
+
+The authors applied synthetic pheromone to experimental colonies containing either one or three termite queens, and then counted the number of eggs laid. The termite queen pheromone is present on the surface of eggs, and lowers the number of eggs laid by queens, similar to my findings in ants. Effect size was estimated from F-statistics in the Results section (specifically, where it says "pheromone: F2,34 = 8.23, p = 0.001; nested-ANOVA"). 
+```{r}
+yamamoto2011a <- -1 * (fes(8.23, 18, 17, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)) 
+yamamoto2011a <- yamamoto2011a[,c(1,3,2)]
+names(yamamoto2011a) <- c("LOR", "LowerCI", "UpperCI")
+yamamoto2011a <- data.frame(Taxon = "Termite", 
+                            Species = "Reticulitermes speratus", 
+                            Study = "yamamoto2011a", 
+                            Blind = "NotBlind",
+                            Fertility.signal = "Yes",
+                            Treatment = "n-butyl-n-butyrate and 2-methyl-1-butanol", 
+                            yamamoto2011a,
+                            p = 0.001, # p-value from the paper
+                            n = 35,
+                            Source = "Summary statistics",
+                            Covariates = 0,
+                            Response = "Moulting rate",
+                            row.names = FALSE)
+all.data <- rbind(all.data, yamamoto2011a)
+```
+
+### Yamamoto et al. 2011: _Reticulitermes speratus_
+Yamamoto, Y., Kobayashi, T., & Matsuura, K. (2012). The lack of chiral specificity in a termite queen pheromone. Physiological entomology, 37, 192-195.
+
+The authors applied synthetic pheromone to experimental colonies containing workers, and then recorded the number of workers that differentiated into reproductives. Effect size was estimated from F-statistics in the Results section (specifically, where it says "treatment: F4,90 = 27.11, P < 0.0001"). No F-stats were presented for the different queen pheromone treatments, so I used the overall F value (the effect was similar for all the queen pheormones that were tested; see Figure 2).
+
+```{r}
+yamamoto2011b <- -1 * (fes(27.11, 45, 45, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)) 
+yamamoto2011b <- yamamoto2011b[,c(1,3,2)]
+names(yamamoto2011b) <- c("LOR", "LowerCI", "UpperCI")
+yamamoto2011b <- data.frame(Taxon = "Termite", 
+                            Species = "Reticulitermes speratus", 
+                            Study = "yamamoto2011b", 
+                            Blind = "NotBlind",
+                            Fertility.signal = "Yes",
+                            Treatment = "n-butyl-n-butyrate and 2-methyl-1-butanol", 
+                            yamamoto2011b,
+                            p = 0.0001, # p-value from the paper
+                            n = 90,
+                            Source = "Summary statistics",
+                            Covariates = 0,
+                            Response = "Moulting rate",
+                            row.names = FALSE)
+all.data <- rbind(all.data, yamamoto2011b)
+```
+
+### Matsuura and Yamamoto 2011: _Reticulitermes speratus_
+Matsuura, K., & Yamamoto, Y. 2011. Workers do not mediate the inhibitory power of queens in a termite, _Reticulitermes speratus_ (Isoptera, Rhinotermitidae). Insectes sociaux, 58, 513-518.
+
+The authors applied synthetic pheromone to experimental colonies containing workers, and then recorded the number of workers that differentiated into reproductives. Effect size was estimated from F-statistics in the Results section (specifically, where it says "F2,36 = 7.65, P < 0.01"). 
+
+```{r}
+matsuura2011 <- -1 * (fes(7.65, 20, 20, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor))
+matsuura2011 <- matsuura2011[,c(1,3,2)]
+names(matsuura2011) <- c("LOR", "LowerCI", "UpperCI")
+matsuura2011 <- data.frame(Taxon = "Termite", 
+                           Species = "Reticulitermes speratus", 
+                           Study = "matsuura2011", 
+                           Blind = "NotBlind",
+                           Fertility.signal = "Yes",
+                           Treatment = "n-butyl-n-butyrate and 2-methyl-1-butanol", 
+                           matsuura2011,
+                           p = 0.01, # p-value from the paper
+                           n = 35,
+                           Source = "Summary statistics",
+                           Covariates = 0,
+                           Response = "Moulting rate",
+                           row.names = FALSE)
+all.data <- rbind(all.data, matsuura2011)
+```
+
+## Stingless bees
+
+### Nunes 2014: _Friesella schrottkyi_ 
+Nunes, T. M. et al. (2014). Queen signals in a stingless bee: suppression of worker ovary activation and spatial distribution of active compounds. Scientific reports, 4.
+
+The authors treated workers with the chemical extract of a queen, or the solvent only, and counted the number of sterile/fertile workers 10 days later. The authors analysed the data with a binomial GLMM, which is what I have been doing in this meta-analysis, so I used the z statistics presented in the paper to calculate effect size.
+
+```{r}
+nunes2014 <- tes(-2.31, 164, 164, verbose = FALSE, dig = 6) %>% select(lOR, l.lor, u.lor)
+names(nunes2014) <- c("LOR", "LowerCI", "UpperCI")
+nunes2014 <- data.frame(Taxon = "Stingless_bee", 
+                        Species = "Friesella schrottkyi", 
+                        Study = "nunes2014", 
+                        Blind = "Blind",
+                        Fertility.signal = "Yes",
+                        Treatment = "Queen extract", 
+                        nunes2014,
+                        p = 0.02, # p-value from the paper
+                        n = 328,
+                        Source = "Summary statistics",
+                        Covariates = 0,
+                        Response = "Ovary activation",
+                        row.names = FALSE) # estimated as two-thirds of the overall sample size
+all.data <- rbind(all.data, nunes2014)
+```
+
+
+## Neaten and sort the effect size estimates
+```{r}
+# function to neatly format the names of each study
+fix.names <- function(namess){
+  sapply(namess, function(x){
+    if(str_detect(x, "[.]")){
+      split <- strsplit(x, split = "[.]")[[1]]
+      x <- split[1]
+      sub.experiment <- paste("(", split[2], ")", sep = "")
+      if(sub.experiment == "(exp1)") sub.experiment <- "(Exp 1)"
+      if(sub.experiment == "(exp2)") sub.experiment <- "(Exp 2)"
+      if(sub.experiment == "(exp3)") sub.experiment <- "(Exp 3)"
+      if(sub.experiment == "(exp4)") sub.experiment <- "(Exp 4)"
+    }
+    year <- str_extract(x, "[[:digit:]]+")
+    name <- str_extract(x, "[[:alpha:]]+")
+    name <- paste(toupper(substr(name, 1, 1)), substr(name, 2, nchar(name)), sep="")
+    if(name == "Vanoystaeyen") name <- "Van Oystaeyen" # Fix these peoples' names
+    if(name == "Vanhonk") name <- "Van Honk"
+    if(name == "Vanerp") name <- "Van Erp"
+    if(name == "Motais") name <- "Motais de Narbonne"
+    if(name == "Degrandihoffman") name <- "DeGrandi-Hoffman"
+    if(name == "Katzav") name <- "Katzav-Gozansky"
+    if(!exists("sub.experiment")) return(paste(name, year))
+    paste(name, year, sub.experiment)
+  }) %>% unname
+}
+
+all.data <- all.data %>% 
+  mutate(Treatment = gsub("queen_extract", "Extract of laying queen", Treatment),
+         Treatment = gsub("3Me", "3-Me", Treatment),
+         Treatment = gsub("c27", "C27", Treatment),                                                              
+         Treatment = gsub("z9c29", "Z-9-C29:1", Treatment),                                                      
+         Treatment = gsub("blend", "C29, 3-MeC29, C30, C31 & 3-MeC31", Treatment),
+         Study = fix.names(Study),
+         n = n / 2, # Make n = average sample size per treatment group
+         year =  as.numeric(str_extract(Study, "[[:digit:]]+"))) %>% # add year column for sorting
+  arrange(Taxon, year, Species, Study, Treatment)
+```
+
+# The effect size dataset
+
+## Sample size of the effect size dataset
+
+*Table 1*: The number of effect sizes, publications, species covered, and blind publications in the dataset.
+```{r message=FALSE, warning=FALSE}
+# note the -5, since some papers contributed more than one species
+n.blind.ones <- (all.data$Study[all.data$Blind == "Blind"] %>% 
+                   unique() %>% length()) 
+all.data %>% summarise(Effect_sizes = n(), 
+                       Experiments = all.data$Study %>% unique %>% length,
+                       Publications = all.data$Study %>% strsplit(split = "\\(") %>% sapply(function(x) x[1]) %>% unique %>% length,
+                       Blind_experiments = n.blind.ones,
+                       Blind_publications = n.blind.ones - 5,
+                       Different_species =  length(unique(Species)),
+                       Effect_sizes_.antsq = sum(Taxon == "Ant"),
+                       Effect_sizes_.honeybeesq = sum(Taxon == "Honeybee"),
+                       Effect_sizes_.bumblebeesq = sum(Taxon == "Bumblebee"),
+                       Effect_sizes_.waspsq = sum(Taxon == "Wasp"),
+                       Effect_sizes_.termitesq = sum(Taxon == "Termite"),
+                       Effect_sizes_.stingless_beesq = sum(Taxon == "Stingless_bee")) %>% melt %>%
+  mutate(variable = gsub("_", " ", variable),
+         variable = gsub("[.]", "(", variable),
+         variable = gsub("q", ")", variable)) %>% 
+  rename_("n" = "value", " " = "variable") %>% pander(split.cell = 40, split.table = Inf)
+```
+
+
+*Table S1*: The effect sizes (log odds ratio; LOR) and other data collected for the meta-analysis. The sample size $n$ refers to the average number of samples (either insects or colonies, as appropriate) per treatment group for the focal comparison (e.g. if comparing 60 controls to 40 treated workers, n = 50). Chemicals that have been shown to be produced at higher levels by fecund individuals are scored as 'fertility signals', and studies were assumed to be conducted without blind protocols unless otherwise stated.
+```{r}
+all.data %>% 
+  select(-year) %>% 
+  mutate(Blind = replace(Blind, Blind == "NotBlind", "Not Blind")) %>% 
+  pander(split.cell = 40, split.table = Inf)
+```
+
+
+*Table S2*: The number of blind and (putatively) non-blind experiments conducted on each taxon. There is a shortage of blind studies for honeybees and termites.
+```{r}
+(all.data %>% select(Study, Blind, Taxon) %>% distinct(.keep_all=T))[,2:3] %>% table %>% pander
+# (all.data %>% select(Study, Blind, Taxon) %>% distinct(.keep_all=T))[,2] %>% table # use this to count the number of blind experiments
+```
+
+
+# Meta-analysis and plots
+
+## Growth of the field over time
+```{r}
+counter <- function(taxon){
+  dat <- (str_extract(unique(all.data$Study[all.data$Taxon == taxon]), "[[:digit:]]+") %>% 
+            as.numeric() %>% sort %>% table %>% 
+            melt %>% rownames_to_column())[,2:3]
+  dat <- rbind(c(dat[1,1] - 1, 0), dat)
+  output <- data.frame(Year = (dat[1,1]):2017, n = 0, Taxon = taxon)
+  for(i in 1:nrow(output)) output$n[i] <- sum(dat[dat[,1] <= output$Year[i], 2])
+  output
+}
+
+dd <- rbind(counter("Honeybee"),
+            counter("Ant"),
+            counter("Bumblebee"),
+            counter("Wasp"),
+            counter("Termite"),
+            counter("Stingless_bee")) 
+spp <- c("Honeybee", "Ant", "Bumblebee", "Termite", "Wasp", "Stingless_bee")
+test <- expand.grid(Year = 1953:2017, Taxon = spp, n = 0)
+for(i in 1:length(1953:2017)){ # cumulative per-year count
+  for(j in 1:5) test$n[test$Taxon == spp[j] & test$Year == (1953:2017)[i]] <- sum(dd$count[dd$Taxon == spp[j] & dd$Year <= (1953:2017)[i]])
+}
+dd$Taxon <- as.character(dd$Taxon)
+dd$Taxon[dd$Taxon == "Stingless_bee"] <- "Stingless bee"
+dd$Taxon <- factor(dd$Taxon, unique(dd$Taxon))
+figure1 <- dd %>% ggplot(aes(x = Year, y = n, fill = Taxon, colour = Taxon)) + geom_line(alpha=0.7,size=1.2) + theme_minimal() + theme(legend.position = c(0.2,0.74), panel.grid.minor = element_blank()) + ylab("Cumulative number of experiments") + scale_colour_brewer(palette = "Set2") + scale_x_continuous(breaks = seq(1960,2010,by=10))
+ggsave(figure1, file = "figures/Figure 1 - number of studies.pdf", height = 4, width = 5)
+figure1
+```
+<br></br>
+*Figure 1*: Cumulative number of experiments per year. Some individual publications reported the results of more than one experiment.
+
+## Plotting all of the effect sizes
+```{r warning=FALSE, fig.height=12, fig.width=7}
+
+all.data$Treatment[all.data$Study == "Oi 2016"] <- "Five queen CHCs"
+
+make.shading <- function(dat){
+  n.per.study <- table(dat$Study) %>% melt
+  st <- unname(unlist(mapply(rep, n.per.study[,1], n.per.study[,2])))
+  st <- factor(as.character(st), (dat$Study %>% unique)) %>% sort
+  n.per.study <- unname(table(st))
+  cols <- unname(do.call("c", (mapply(rep, c("light","dark"), each = n.per.study))))
+  maxs <- seq(1.5, length(cols)+0.5, by = 1)
+  mins <- seq(0.5, length(cols)-0.5, by = 1)
+  data.frame(min = mins, max = maxs, col = cols)
+}
+
+
+plot.data <- all.data %>% 
+  mutate(Taxon = factor(Taxon, rev(spp)),
+         Fertility.signal = factor(Fertility.signal, c("Yes", "No"))) %>%
+  arrange(Taxon, -year, desc(Study), Treatment) %>% 
+  mutate(y = paste(Study, Treatment)) %>%
+  mutate(Taxon = replace(as.character(Taxon), as.character(Taxon) == "Stingless_bee", "Stingless bee"),
+         Taxon = factor(Taxon, rev(str_replace(spp, "_", " "))))
+
+studies <- unique(plot.data$Study)
+plot.data$y2 <- plot.data$y
+for(i in 1:length(studies)){
+  if(sum(plot.data$Study == studies[i]) > 1){
+    focal.rows <- which(plot.data$Study == studies[i])
+    focal.rows <- focal.rows[-length(focal.rows)]
+    plot.data$y2[focal.rows] <- plot.data$Treatment[focal.rows]
+  }
+}
+
+shading <- make.shading(plot.data)
+
+figure2 <- ggplot() + 
+  geom_rect(data = shading, aes(ymin = min, ymax = max, xmin = -10, xmax = 10, fill = col), alpha = 0.6) + 
+  scale_fill_manual(values = c("white", "grey80"), guide = FALSE) + 
+  geom_vline(xintercept = -0.40377, linetype = 2, colour = "steelblue") +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_errorbarh(data=plot.data, aes(x=LOR, y=1:length(y2), colour = Taxon, xmin = LowerCI, xmax = UpperCI, alpha = Fertility.signal), height = 0) +
+  geom_point(data=plot.data, aes(x=LOR, y=1:length(y2), colour = Taxon, shape = Fertility.signal, alpha=Fertility.signal)) +
+  xlab("Effect on fecundity\n(Log odds ratio \u00B1 95% CIs)") + ylab(NULL) + 
+  scale_y_continuous(labels = plot.data$y2, breaks = 1:length(plot.data$y2), expand=c(0,0)) + 
+  coord_cartesian(xlim=c(-6.4, 1.4)) + 
+  theme_minimal() + 
+  theme(panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank(), axis.ticks.y = element_blank()) + 
+  scale_shape_discrete(name = "Fertility\nsignal") + 
+  scale_alpha_manual(values = c(1, 0.3), guide = FALSE) +
+  scale_colour_brewer(palette = "Set2", direction = -1) 
+ggsave(figure2, file = "figures/Figure 2 - big effect size plot.pdf", height = 12.8, width=8)
+figure2
+```
+<br></br>
+*Figure 2*: All effect sizes used in the meta-analysis, showing that most fertility-related chemicals tested so far have large, negative effects on the fecundity of recipients. The grey and white shading groups effect sizes that come from the same experiment, and the y-axis gives the name of the study/experiment as well as the chemical being tested. Each effect size is calculated relative to a control, typically a solvent-only treatment or a queen lacking fertility-related chemicals. The black dashed line marks an effect size of zero, and the blue dashed line marks the point at which effect sizes are conventionally considered ‘large’ (equivalent to Cohen’s d = 0.5). Semi-transparent triangles mark effect sizes relating to chemicals that do not correlate with fecundity, which are sometimes used as controls in experiments that also test a fertility signal. For brevity, only the first author’s name is shown; see the Online Supplementary Material for complete references, a description of each study, and complete information on how each effect size was calculated. QE stands for ‘queen equivalents’, i.e. the pheromone dose relative to the average quantity possessed by a single queen.
+
+
+## Meta-analysis results
+
+### Mixed effect meta-analysis of all the data
+Results of a mixed effects meta-analysis with taxon, blindness, and whether or not the compound is related to fertility as moderator variables. All three moderators explained signficant variation in effect size. Non-blind effect sizes tended to be more extreme (i.e. more negative), and so did effect sizes associated with fertility-related compounds. Honeybees and termites showed the strongest effects.
+```{r}
+# Write a function to calculate I^2,  the proportion of variance due to hetergeneity in true effects:
+# Based on code at http://www.metafor-project.org/doku.php/tips:i2_multilevel_multivariate
+get.I2 <- function(model, SE){
+  W <- diag(1/SE)
+  X <- model.matrix(model)
+  P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+  paste("I^2 =", with(model, 100 * sum(sigma2) / (sum(sigma2) + (k-p)/sum(diag(P)))) %>% round(2))
+}
+
+
+SE.LOR <- with(all.data, (UpperCI-LOR)/1.96) # the SE for each effect size
+all.data$Taxon <- all.data$Taxon %>% factor %>% relevel(ref="Honeybee")
+all.data$Response <- all.data$Response %>% factor %>% relevel(ref="Ovary activation")
+
+meta_analysis <- rma.mv(LOR, SE.LOR, 
+                        mods = ~ Taxon + Fertility.signal + Blind, 
+                        random = ~ 1 | Study, 
+                        method = "ML", 
+                        data = all.data)
+summary(meta_analysis)
+get.I2(meta_analysis, SE.LOR)
+```
+
+### Sensitivity analysis: removing the most variable datapoints
+The I^2 for the meta-analysis of all the data is very high, suggesting that the true effects differ greatly between studies. Inspection of this plot confirms my suspicion: effect sizes that were calculated from raw means are extremely variable, at least in honeybees. In many cases, these data points do not make proper use of the original data: for example, many of the older studies present only the average % fertile workers per colony, for a handful of colonies (this gives a very crude estimate of effect size, because there are typically 100s of workers but <10 colonies). 
+
+```{r}
+all.data %>% 
+  ggplot(aes(Source, LOR, colour = Taxon)) + 
+  geom_quasirandom(alpha=0.7) + 
+  facet_wrap(~Taxon) + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none") + 
+  xlab("Source of the effect size") + ylab("Log odds ratio")
+```
+<br></br>
+*Figure S1*: Effect sizes obtained from a difference in means in honeybees were highly variable, while effect sizes obtained by other means (e.g. from the raw data, or from summary statistics such as F, t or chi-squared) or from other taxa (e.g. ants) were far less heterogeneous. Since these honeybee results are putativewly untrustworthy, I also ran the meta-analysis with these studies removed (see next code chunk).
+
+
+I therefore re-ran the meta-analysis with these studies removed. The results are very similar, except that I^2 is much lower, and the moderator "fertility signal" has changed from being borderline non-significant to being statistically significant (p = 0.014).
+```{r}
+SE.LOR.sensitivity  <- with(all.data %>% filter(!(Source == "Difference in means" & Taxon == "Honeybee")), (UpperCI-LOR)/1.96) # the SE for each effect size
+
+meta_analysis_sensitivity <- rma.mv(LOR, SE.LOR.sensitivity, 
+                                    mods = ~  Taxon + Fertility.signal + Blind, 
+                                    random = ~ 1 | Study, 
+                                    method = "ML", 
+                                    data = all.data %>% filter(!(Source == "Difference in means" & Taxon == "Honeybee")))
+summary(meta_analysis_sensitivity)
+get.I2(meta_analysis_sensitivity, SE.LOR.sensitivity)
+```
+
+
+### Post-hoc analysis of the bumblebee data
+In the overall meta-analysis, and in Figure 3, it appears that fertility signals have no effect on fecundity in bumblebees. However, the bumblebee data contains a few treatments that are not cuticular hydrocarbons, specifically esters and volatile odours from the queen. To test whether the inclusion of these non-CHC chemicals is driving the non-significant result, I also ran a meta-analysis on _just_ the data on bumblebees, after excluding the effect sizes relating to volatile odours and esters. A moderator-free model provided the best fit, and there was a significant overall effect. This suggests that CHCs reduce worker fecundity in bumblebees, while esters and volatile odours do not. However, this is a post-hoc analysis and should thus be treated with caution until more empirical data are collected.
+
+```{r}
+bumblebee.CHCs.data <- all.data %>% 
+  filter(Taxon == "Bumblebee") %>%
+  filter(Treatment != "Queen volatiles",
+         !(grepl("oleate", Treatment))) 
+
+SE.LOR.bumblebee <- with(bumblebee.CHCs.data, (UpperCI-LOR)/1.96) 
+
+meta_analysis.bumblebee <- rma.mv(LOR, SE.LOR.bumblebee, 
+                                  random = list(~ 1 | Study), 
+                                  method = "ML", 
+                                  data = bumblebee.CHCs.data)
+summary(meta_analysis.bumblebee)
+get.I2(meta_analysis.bumblebee, SE.LOR.bumblebee)
+```
+
+## Average effect size per taxon
+A plot of the average effect size, split by taxon. For bumblebees and honeybees, some studies were not performed blind, and these are shown separately. The average effect sizes were obtained using the ``predict()`` method for the meta-analysis object generated by the ``rma.mv()`` function.
+```{r}
+# function that makes predict.rma work like a normal predict() function, instead of the idiosyncratic way that it works by default.
+get.predictions <- function(newdata){
+  Ant<-0; Wasp<-0; Bumblebee<-0; Termite<-0; Stingless_bee<-0; Blind<-0; Yes<-0
+  if(newdata[1] == "Ant") Ant<-1
+  if(newdata[1] == "Wasp") Wasp<-1
+  if(newdata[1] == "Bumblebee") Bumblebee<-1
+  if(newdata[1] == "Termite") Termite<-1
+  if(newdata[1] == "Stingless_bee") Stingless_bee<-1
+  if(newdata[2] == "NotBlind") Blind<-1
+  if(newdata[3] == "Yes") Yes<-1
+  predict(meta_analysis, newmods=c(Ant=Ant, Wasp=Wasp, Bumblebee=Bumblebee, Termite=Termite, Stingless_bee=Stingless_bee, Blind=Blind, Yes=Yes))
+}
+
+# Get the predictions for each combination of moderators
+predictions <- expand.grid(Taxon = c("Stingless_bee", "Bumblebee", "Ant", "Wasp", "Termite", "Honeybee"),
+                           Blind = c("NotBlind", "Blind"),
+                           Fertility.signal = c("Yes", "No"))
+predictions <- cbind(predictions, do.call("rbind", apply(predictions, 1, get.predictions))) %>%
+  select(Taxon, Blind, Fertility.signal, pred, se, ci.lb, ci.ub) 
+for(i in 4:7) predictions[,i] <- unlist(predictions[,i])
+predictions$Taxon <- factor(predictions$Taxon, levels = levels(plot.data$Taxon))
+
+pd <- position_dodge(0.3)
+figure3 <- predictions %>% 
+  filter(Fertility.signal == "Yes") %>%
+  filter(Taxon != "Stingless_bee") %>%
+  ggplot(aes(Taxon, pred, colour=Taxon, shape=Blind)) + 
+  geom_hline(yintercept = 0, linetype = 2) + 
+  geom_hline(yintercept = -0.40377, linetype = 2, colour = "steelblue") +
+  geom_quasirandom(data=all.data %>% mutate(Taxon = as.character(Taxon), 
+                                            Taxon = replace(Taxon, Taxon == "Stingless_bee", "Stingless bee"),
+                                            Taxon = factor(Taxon, levels(plot.data$Taxon))) %>% filter(Fertility.signal == "Yes"),
+                   aes(Taxon, LOR), alpha=0.7) +
+  geom_errorbar(mapping = aes(ymin = ci.lb, ymax = ci.ub), width = 0, position = pd, size=1, alpha=0.5) + 
+  geom_point(position = pd, size=3) + 
+  ylab("Estimated mean effect size\n(Log odds ratio \u00B1 95% CIs)") +
+  theme_minimal(12) + 
+  theme(panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank(), legend.position = "none") +
+  scale_colour_brewer(palette = "Set2", direction = -1) +
+  coord_flip()
+ggsave(figure3, file = "figures/Figure 3 - estimates per taxon.pdf", width = 6, height = 5)
+figure3
+```
+<br></br>
+*Figure 3*: The estimated effect size of fertility-signalling chemicals on recipient fecundity in each taxon. The error bars show the consensus effect size and its 95% CIs (estimated by meta-analysis), and the points show the individuals effect sizes from each comparison of a fertility-signalling chemical with a control. The triangles denote non-blind studies, while the circles are blind studies. The black dashed line marks zero (denoting no effect), and the blue dashed line marks 0.404, which corresponds to a large effect (equivalent to Cohen's d = 0.5).
+
+*Table S3*: The average effect size estimated for each taxon (for fertility signals, and assuming blind data recording), and the associated minimum sample sizes needed to reach 80% and 99% power. The power calculation assumes a simple unpaired, two-treatment design, and that the threshold for statistical significance is p < 0.05.
+```{r}
+minimum.n <- predictions %>% 
+  filter(Blind == "Blind", Fertility.signal == "Yes") %>%
+  mutate(Taxon = replace(Taxon, is.na(Taxon), "Stingless bee"),
+         Minimum.n.80 = 0, Minimum.n.99 = 0) %>% 
+select(Taxon, pred, Minimum.n.80, Minimum.n.99)
+minimum.n$pred[minimum.n$Taxon == "Bumblebee"] <- meta_analysis.bumblebee$b # Uses result from bumblebee meta-analysis (otherwise n = many thousands)
+
+# Convert LOR to Cohen's d https://www.meta-analysis.com/downloads/Meta-analysis%20Converting%20among%20effect%20sizes.pdf
+minimum.n <- minimum.n %>% 
+  mutate(pred = round(pred * sqrt(3) / pi, 2)) %>% 
+  arrange(pred)
+
+for(i in 1:nrow(minimum.n)) { # Get required sample size, assuming it's a simple two-treatment experiment with balanced sample size
+  minimum.n$Minimum.n.80[i] <- pwr.t.test(d = minimum.n$pred[i], power = 0.8, type = "two.sample")$n %>% round
+  minimum.n$Minimum.n.99[i] <- pwr.t.test(d = minimum.n$pred[i], power = 0.99, type = "two.sample")$n %>% round
+}
+names(minimum.n) <- c("Taxon", "Mean effect size\n(converted to Cohen's d)", "n to achieve 80% power", "n to achieve 99% power") 
+minimum.n %>% pander(split.cell = 40, split.table = Inf)
+```
+
+
+## Non-significant studies had small sample sizes
+```{r}
+set.seed(1)
+figure4 <- all.data %>% 
+  filter(Fertility.signal == "Yes") %>% # fertility-linked chemicals only
+  filter(Taxon != "Honeybee" & Taxon != "Termite") %>% # CHCs have yet to be bioassayed in honeybees or termites
+  filter(!grepl("oleate", Treatment)) %>% # remove the esters from Van Oystaeyen 
+  mutate(Taxon = as.character(Taxon), 
+         Taxon = replace(Taxon, Taxon == "Stingless_bee", "Stingless bee"),
+         significant = "Not significant", 
+         significant = replace(significant, p < 0.05, "Significant")) %>%
+  ggplot(aes(significant, n)) + 
+  geom_quasirandom(alpha=0.8, method = "tukeyDense", aes(colour = Taxon)) +
+  stat_summary(fun.data = "mean_cl_boot") + 
+  xlab("Effect of fertility-linked\nCHCs on fecundity") + 
+  ylab("Mean sample size per treatment") + 
+  scale_y_continuous(breaks = seq(0, 800, by=200)) + 
+  scale_colour_brewer(palette = "Set2", direction = -1) +
+  theme_minimal(12) + 
+  theme(panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank())
+ggsave(figure4, file = "figures/Figure 4 - sample sizes.pdf", height = 4.3, width = 6)
+figure4
+```
+<br></br>
+*Figure 4*: Sample size for all wasp, bumblebee and ant experiments, for all effect sizes involving a cuticular hydrocarbon (CHC) that correlates with fecundity. The plot illustrates that most of the non-significant results have a low sample size (in the range of n=6-45 per treatment). The non-significant results with n > 100 are from Holman et al. 2016, which tested a number of CHCs with chain lengths outside of the natural range.
+
+
+## Funnel plot
+A funnel plot of the effect sizes from the meta-analysis. These plots are used to check for publication bias. Since it's fairly symmetrical, publication bias seems to be either weak or absent.
+```{r}
+funnel(meta_analysis, back = "lemonchiffon1", las=1)
+pdf("figures/Figure 5 - funnel plot.pdf")
+funnel(meta_analysis, back = "lemonchiffon1", las=1)
+dev.off()
+```
+<br></br>
+*Figure 5*: Funnel plot, illustrating that publication bias is weak or absent. There is a slight shortage of low-powered studies finding a more positive (i.e. weaker inhibitory) effect of queen pheromones on fecundity. The plot shows the residual for each effect size from the meta-analysis plotted against its standard error, and the yellow region denotes samples that fall outside the 95% confidence intervals expected based on the overall distribution of effects.
+
+
+
+## Plot examining evidence that the _Apis_ queen pheromone is a blend 
+Many papers write that the honeybee queen pheromone is a blend of chemicals that work together either synergistically or additively. QMP (queen mandibular pheromone) is the term used to refer to a 5-chemical blend produced in the mandibular gland. The following figure illustrates that there is little or no evidence for the hypothesis that the components of the QMP blend work together synergistically, and shows that one component of QMP - 9-ODA - has a large effect when presented alone. Also, a single study (Tan et al. 2015) found that 9-HDA is bioactive when presented alone, suggesting that QMP contains two compounds affecting fecundity. Note that this resut is from _Apis cerana_, not _A. mellifera_.
+
+```{r fig.height=8, fig.width=7}
+plot.data$isODA <- "No"
+plot.data$isODA[grep("9-ODA", plot.data$Treatment)] <- "Yes"
+plot.data$isODA[plot.data$Study == "Kaatz 1992"] <- "Yes"
+plot.data$isODA[plot.data$Treatment == "Mandibular gland extract"] <- "No"
+plot.data$isODA <- relevel(factor(plot.data$isODA), ref = "Yes")
+
+plot.data %>% filter(Taxon == "Honeybee") %>% arrange(-UpperCI) %>% mutate(y = factor(y, unique(y))) %>%
+  ggplot(aes(x=LOR, y=y, colour = isODA)) + 
+  geom_vline(xintercept = -0.40377, linetype = 2, colour = "steelblue") +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_errorbarh(aes(xmin = LowerCI, xmax = UpperCI), height = 0) +
+  geom_point() + 
+  xlab("Effect on fecundity\n(Log odds ratio \u00B1 95% CIs)") + ylab(NULL) + 
+  theme_bw() + theme(panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank(), axis.ticks.y = element_blank(), legend.position = "none") 
+```
+<br></br>
+*Figure S2*: The honeybee data from Figure 2, arranged by the position of the upper effect size confidence interval. The figure illustrates that experiments using 9-ODA (highlighted in red) had similar, or stronger, effects on fecundity than experiments using additional queen chemicals. Thus, there is little or no evidence that the components of QMP interact synergistically to affect worker fecundity, as is often claimed.
+
+
+
+# R session information
+This section shows the operating system and R packages used to produce this document. 
+```{r}
+sessionInfo() %>% pander
+```
